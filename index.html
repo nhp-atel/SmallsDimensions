@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SmallsDimensions - Scheduler Dashboard</title>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+<style>
+:root {
+    --bg: #f0f2f5;
+    --card: #ffffff;
+    --primary: #2563eb;
+    --primary-hover: #1d4ed8;
+    --danger: #dc2626;
+    --danger-hover: #b91c1c;
+    --success: #16a34a;
+    --warning: #d97706;
+    --text: #1e293b;
+    --text-muted: #64748b;
+    --border: #e2e8f0;
+    --radius: 10px;
+    --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    font-family: 'Segoe UI', Inter, -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+    padding: 20px;
+}
+.container { max-width: 1200px; margin: 0 auto; }
+
+/* Header */
+.header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 24px; background: var(--card); border-radius: var(--radius);
+    box-shadow: var(--shadow); margin-bottom: 20px;
+}
+.header h1 { font-size: 1.4rem; font-weight: 700; }
+.status-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 600;
+}
+.status-badge.running { background: #dcfce7; color: #166534; }
+.status-badge.stopped { background: #fee2e2; color: #991b1b; }
+.status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+}
+.status-badge.running .status-dot { background: #16a34a; animation: pulse 2s infinite; }
+.status-badge.stopped .status-dot { background: #dc2626; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+/* Cards */
+.card {
+    background: var(--card); border-radius: var(--radius);
+    box-shadow: var(--shadow); margin-bottom: 20px; overflow: hidden;
+}
+.card-header {
+    padding: 14px 20px; font-weight: 600; font-size: 0.95rem;
+    border-bottom: 1px solid var(--border); display: flex;
+    align-items: center; justify-content: space-between; cursor: pointer;
+    user-select: none;
+}
+.card-header .toggle { font-size: 0.8rem; color: var(--text-muted); }
+.card-body { padding: 20px; }
+.card-body.collapsed { display: none; }
+
+/* Grid layout */
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 768px) { .grid-2 { grid-template-columns: 1fr; } }
+
+/* Form elements */
+label { display: block; font-size: 0.85rem; font-weight: 500; margin-bottom: 4px; color: var(--text-muted); }
+input, select {
+    width: 100%; padding: 8px 12px; border: 1px solid var(--border);
+    border-radius: 6px; font-size: 0.9rem; background: #fff;
+}
+input:focus, select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
+.form-row { display: flex; gap: 12px; margin-bottom: 12px; }
+.form-row > div { flex: 1; }
+.checkbox-group { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 6px; }
+.checkbox-group label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; font-weight: 400; }
+.checkbox-group input[type="checkbox"] { width: auto; }
+
+/* Buttons */
+.btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 9px 18px; border: none; border-radius: 6px;
+    font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: all 0.15s;
+}
+.btn-primary { background: var(--primary); color: #fff; }
+.btn-primary:hover { background: var(--primary-hover); }
+.btn-success { background: var(--success); color: #fff; }
+.btn-success:hover { background: #15803d; }
+.btn-danger { background: var(--danger); color: #fff; }
+.btn-danger:hover { background: var(--danger-hover); }
+.btn-outline {
+    background: transparent; color: var(--primary);
+    border: 1.5px solid var(--primary);
+}
+.btn-outline:hover { background: rgba(37,99,235,0.06); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-group { display: flex; gap: 10px; flex-wrap: wrap; }
+
+/* Status grid */
+.status-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 12px; margin-top: 16px;
+}
+.status-item { padding: 12px; background: var(--bg); border-radius: 8px; }
+.status-item .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
+.status-item .value { font-size: 1.1rem; font-weight: 600; margin-top: 2px; }
+.status-item .value.error { color: var(--danger); font-size: 0.85rem; font-weight: 400; }
+
+/* Tabs */
+.tabs { display: flex; gap: 0; border-bottom: 2px solid var(--border); margin-bottom: 16px; }
+.tab {
+    padding: 10px 20px; cursor: pointer; font-size: 0.9rem; font-weight: 500;
+    color: var(--text-muted); border-bottom: 2px solid transparent;
+    margin-bottom: -2px; transition: all 0.15s;
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+/* Tables */
+.data-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.data-table th, .data-table td {
+    padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border);
+}
+.data-table th {
+    background: var(--bg); font-weight: 600; position: sticky; top: 0;
+    font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-muted);
+}
+.data-table tr:hover td { background: #f8fafc; }
+.table-scroll { max-height: 500px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+
+/* History table */
+.history-scroll { max-height: 300px; overflow-y: auto; }
+.history-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+.history-table th, .history-table td { padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--border); }
+.history-table th { background: var(--bg); font-size: 0.75rem; text-transform: uppercase; color: var(--text-muted); position: sticky; top: 0; }
+.badge-ok { background: #dcfce7; color: #166534; padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; }
+.badge-err { background: #fee2e2; color: #991b1b; padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; }
+
+/* Date picker row */
+.data-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+.data-toolbar select { width: auto; min-width: 160px; }
+
+.loading { text-align: center; padding: 40px; color: var(--text-muted); }
+.empty-state { text-align: center; padding: 40px; color: var(--text-muted); font-style: italic; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<!-- Header -->
+<div class="header">
+    <h1>SmallsDimensions Scheduler</h1>
+    <div id="headerBadge" class="status-badge stopped">
+        <span class="status-dot"></span>
+        <span id="headerStatus">Stopped</span>
+    </div>
+</div>
+
+<!-- Configuration Panel -->
+<div class="card">
+    <div class="card-header" onclick="toggleCard('configBody')">
+        Configuration
+        <span class="toggle" id="configToggle">Hide</span>
+    </div>
+    <div class="card-body" id="configBody">
+        <div class="form-row">
+            <div>
+                <label>Report Type</label>
+                <select id="cfgReport">
+                    <option value="small" selected>Small</option>
+                    <option value="large">Large</option>
+                </select>
+            </div>
+            <div>
+                <label>Fetch Interval</label>
+                <select id="cfgInterval">
+                    <option value="15">Every 15 min</option>
+                    <option value="30" selected>Every 30 min</option>
+                    <option value="45">Every 45 min</option>
+                    <option value="60">Every 60 min</option>
+                </select>
+            </div>
+        </div>
+        <div class="form-row">
+            <div><label>Length (L)</label><input type="number" id="cfgL" value="16"></div>
+            <div><label>Width (W)</label><input type="number" id="cfgW" value="16"></div>
+            <div><label>Height (H)</label><input type="number" id="cfgH" value="7"></div>
+        </div>
+        <div style="margin-bottom: 12px;">
+            <label>Sorts</label>
+            <div class="checkbox-group">
+                <label><input type="checkbox" id="sortALL" value="ALL" checked> ALL</label>
+                <label><input type="checkbox" id="sortSUN" value="SUN"> Sunrise</label>
+                <label><input type="checkbox" id="sortDAY" value="DAY"> Daysort</label>
+                <label><input type="checkbox" id="sortTWI" value="TWI"> Twilight</label>
+                <label><input type="checkbox" id="sortNGT" value="NGT"> Night</label>
+            </div>
+        </div>
+        <div style="margin-bottom: 12px;">
+            <label><input type="checkbox" id="cfgAutoStart"> Auto-start scheduler on app pool restart</label>
+        </div>
+        <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
+        <span id="configMsg" style="margin-left: 12px; font-size: 0.85rem; color: var(--success);"></span>
+    </div>
+</div>
+
+<!-- Control Panel -->
+<div class="grid-2">
+    <div class="card">
+        <div class="card-header">Controls</div>
+        <div class="card-body">
+            <div class="btn-group">
+                <button class="btn btn-success" id="btnStart" onclick="startScheduler()">Start Scheduler</button>
+                <button class="btn btn-danger" id="btnStop" onclick="stopScheduler()" disabled>Stop Scheduler</button>
+                <button class="btn btn-outline" id="btnFetchNow" onclick="fetchNow()">Fetch Now</button>
+            </div>
+            <div id="controlMsg" style="margin-top: 10px; font-size: 0.85rem;"></div>
+        </div>
+    </div>
+    <div class="card">
+        <div class="card-header">Status</div>
+        <div class="card-body" style="padding: 12px 20px;">
+            <div class="status-grid">
+                <div class="status-item">
+                    <div class="label">State</div>
+                    <div class="value" id="stState">--</div>
+                </div>
+                <div class="status-item">
+                    <div class="label">Last Fetch</div>
+                    <div class="value" id="stLastRun">--</div>
+                </div>
+                <div class="status-item">
+                    <div class="label">Next Fetch</div>
+                    <div class="value" id="stNextRun">--</div>
+                </div>
+                <div class="status-item">
+                    <div class="label">Today's Fetches</div>
+                    <div class="value" id="stTodayCount">0</div>
+                </div>
+            </div>
+            <div id="stError" style="margin-top: 8px; display: none;">
+                <div style="font-size: 0.75rem; color: var(--danger); font-weight: 600;">LAST ERROR</div>
+                <div id="stErrorText" style="font-size: 0.82rem; color: var(--danger);"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Data View Panel -->
+<div class="card">
+    <div class="card-header">Data View</div>
+    <div class="card-body">
+        <div class="data-toolbar">
+            <div>
+                <label>Date</label>
+                <select id="dateSelect" onchange="loadDayData()"></select>
+            </div>
+            <button class="btn btn-outline" onclick="refreshDates()">Refresh Dates</button>
+            <button class="btn btn-primary" onclick="downloadExcel()">Download Excel</button>
+        </div>
+
+        <div class="tabs" id="dataTabs">
+            <div class="tab active" data-tab="summary" onclick="switchTab('summary')">Summary</div>
+            <div class="tab" data-tab="sunrise" onclick="switchTab('sunrise')">Sunrise</div>
+            <div class="tab" data-tab="daysort" onclick="switchTab('daysort')">Daysort</div>
+            <div class="tab" data-tab="twilight" onclick="switchTab('twilight')">Twilight</div>
+            <div class="tab" data-tab="night" onclick="switchTab('night')">Night</div>
+        </div>
+
+        <div class="tab-content active" id="tab-summary">
+            <div id="summaryContent" class="empty-state">No data loaded</div>
+        </div>
+        <div class="tab-content" id="tab-sunrise">
+            <div id="sunriseContent" class="empty-state">No data</div>
+        </div>
+        <div class="tab-content" id="tab-daysort">
+            <div id="daysortContent" class="empty-state">No data</div>
+        </div>
+        <div class="tab-content" id="tab-twilight">
+            <div id="twilightContent" class="empty-state">No data</div>
+        </div>
+        <div class="tab-content" id="tab-night">
+            <div id="nightContent" class="empty-state">No data</div>
+        </div>
+    </div>
+</div>
+
+<!-- Fetch History -->
+<div class="card">
+    <div class="card-header" onclick="toggleCard('historyBody')">
+        Fetch History
+        <span class="toggle" id="historyToggle">Show</span>
+    </div>
+    <div class="card-body collapsed" id="historyBody">
+        <div class="history-scroll">
+            <table class="history-table">
+                <thead><tr>
+                    <th>Time (Central)</th>
+                    <th>Status</th>
+                    <th>SUN</th>
+                    <th>DAY</th>
+                    <th>TWI</th>
+                    <th>NGT</th>
+                    <th>Error</th>
+                </tr></thead>
+                <tbody id="historyTbody"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+</div><!-- /container -->
+
+<script>
+// --- State ---
+let dayData = []; // current day's consolidated snapshots
+let pollTimer = null;
+
+// --- API helpers ---
+function api(url) {
+    return fetch(url).then(r => r.json());
+}
+function apiPost(url, body) {
+    return fetch(url, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) }).then(r => r.json());
+}
+
+// --- Card toggle ---
+function toggleCard(id) {
+    const el = document.getElementById(id);
+    const toggleEl = document.getElementById(id.replace('Body','Toggle'));
+    el.classList.toggle('collapsed');
+    if (toggleEl) toggleEl.textContent = el.classList.contains('collapsed') ? 'Show' : 'Hide';
+}
+
+// --- Config ---
+function loadConfig() {
+    api('scheduler_config.ashx').then(cfg => {
+        if (!cfg) return;
+        document.getElementById('cfgReport').value = cfg.Report || 'small';
+        document.getElementById('cfgInterval').value = (cfg.IntervalMinutes || 30).toString();
+        document.getElementById('cfgL').value = cfg.L || '16';
+        document.getElementById('cfgW').value = cfg.W || '16';
+        document.getElementById('cfgH').value = cfg.H || '7';
+        document.getElementById('cfgAutoStart').checked = !!cfg.AutoStart;
+
+        // Sorts
+        const sorts = (cfg.Sorts || ['ALL']).map(s => s.toUpperCase());
+        document.getElementById('sortALL').checked = sorts.includes('ALL');
+        document.getElementById('sortSUN').checked = sorts.includes('SUN');
+        document.getElementById('sortDAY').checked = sorts.includes('DAY');
+        document.getElementById('sortTWI').checked = sorts.includes('TWI');
+        document.getElementById('sortNGT').checked = sorts.includes('NGT');
+    }).catch(() => {});
+}
+
+function saveConfig() {
+    const sorts = [];
+    if (document.getElementById('sortALL').checked) sorts.push('ALL');
+    if (document.getElementById('sortSUN').checked) sorts.push('SUN');
+    if (document.getElementById('sortDAY').checked) sorts.push('DAY');
+    if (document.getElementById('sortTWI').checked) sorts.push('TWI');
+    if (document.getElementById('sortNGT').checked) sorts.push('NGT');
+    if (sorts.length === 0) sorts.push('ALL');
+
+    const config = {
+        Report: document.getElementById('cfgReport').value,
+        L: document.getElementById('cfgL').value,
+        W: document.getElementById('cfgW').value,
+        H: document.getElementById('cfgH').value,
+        Sorts: sorts,
+        IntervalMinutes: parseInt(document.getElementById('cfgInterval').value) || 30,
+        MaxPolls: 25,
+        DelayMs: 1200,
+        AutoStart: document.getElementById('cfgAutoStart').checked
+    };
+
+    apiPost('scheduler_config.ashx', config).then(r => {
+        const msg = document.getElementById('configMsg');
+        msg.textContent = 'Saved!';
+        setTimeout(() => msg.textContent = '', 3000);
+    }).catch(e => {
+        document.getElementById('configMsg').textContent = 'Error: ' + e.message;
+    });
+}
+
+// --- Scheduler control ---
+function startScheduler() {
+    document.getElementById('btnStart').disabled = true;
+    api('scheduler.ashx?action=start').then(r => {
+        showControlMsg('Scheduler started', 'var(--success)');
+        pollStatus();
+    }).catch(e => showControlMsg('Error: ' + e.message, 'var(--danger)'))
+      .finally(() => document.getElementById('btnStart').disabled = false);
+}
+
+function stopScheduler() {
+    document.getElementById('btnStop').disabled = true;
+    api('scheduler.ashx?action=stop').then(r => {
+        showControlMsg('Scheduler stopped', 'var(--danger)');
+        pollStatus();
+    }).catch(e => showControlMsg('Error: ' + e.message, 'var(--danger)'))
+      .finally(() => document.getElementById('btnStop').disabled = false);
+}
+
+function fetchNow() {
+    const btn = document.getElementById('btnFetchNow');
+    btn.disabled = true;
+    btn.textContent = 'Fetching...';
+    api('scheduler.ashx?action=runnow').then(r => {
+        showControlMsg('Fetch triggered - data will appear shortly', 'var(--primary)');
+        // Poll a few times to pick up the result
+        setTimeout(() => { pollStatus(); loadHistory(); loadDayData(); }, 5000);
+        setTimeout(() => { pollStatus(); loadHistory(); loadDayData(); }, 15000);
+        setTimeout(() => { pollStatus(); loadHistory(); loadDayData(); }, 30000);
+    }).catch(e => showControlMsg('Error: ' + e.message, 'var(--danger)'))
+      .finally(() => { btn.disabled = false; btn.textContent = 'Fetch Now'; });
+}
+
+function showControlMsg(text, color) {
+    const el = document.getElementById('controlMsg');
+    el.textContent = text;
+    el.style.color = color;
+    setTimeout(() => el.textContent = '', 8000);
+}
+
+// --- Status polling ---
+function pollStatus() {
+    api('scheduler.ashx?action=status').then(st => {
+        const running = st.isRunning;
+        const badge = document.getElementById('headerBadge');
+        const badgeText = document.getElementById('headerStatus');
+
+        badge.className = 'status-badge ' + (running ? 'running' : 'stopped');
+        badgeText.textContent = running ? 'Running' : 'Stopped';
+
+        document.getElementById('btnStart').disabled = running;
+        document.getElementById('btnStop').disabled = !running;
+
+        document.getElementById('stState').textContent = running ? 'Running' : 'Stopped';
+        document.getElementById('stState').style.color = running ? 'var(--success)' : 'var(--danger)';
+
+        document.getElementById('stLastRun').textContent = st.lastRunUtc ? formatUtc(st.lastRunUtc) : '--';
+        document.getElementById('stNextRun').textContent = st.nextRunUtc ? formatUtc(st.nextRunUtc) : '--';
+        document.getElementById('stTodayCount').textContent = st.todayFetchCount || '0';
+
+        const errDiv = document.getElementById('stError');
+        if (st.lastError) {
+            errDiv.style.display = 'block';
+            document.getElementById('stErrorText').textContent = st.lastError;
+        } else {
+            errDiv.style.display = 'none';
+        }
+
+        // Auto-poll when running
+        if (pollTimer) clearInterval(pollTimer);
+        if (running) {
+            pollTimer = setInterval(() => {
+                pollStatus();
+                loadHistory();
+            }, 15000);
+        }
+    }).catch(() => {});
+}
+
+function formatUtc(isoStr) {
+    try {
+        const d = new Date(isoStr);
+        return d.toLocaleString('en-US', { timeZone: 'America/Chicago', hour: 'numeric', minute: '2-digit', hour12: true, month: 'short', day: 'numeric' });
+    } catch { return isoStr; }
+}
+
+// --- History ---
+function loadHistory() {
+    api('scheduler.ashx?action=history').then(r => {
+        const tbody = document.getElementById('historyTbody');
+        tbody.innerHTML = '';
+        (r.history || []).forEach(h => {
+            const tr = document.createElement('tr');
+            const sc = h.SortCounts || {};
+            tr.innerHTML = `
+                <td>${esc(h.FetchedAtCentral || '')}</td>
+                <td>${h.Success ? '<span class="badge-ok">OK</span>' : '<span class="badge-err">FAIL</span>'}</td>
+                <td>${esc(sc.SUN || '--')}</td>
+                <td>${esc(sc.DAY || '--')}</td>
+                <td>${esc(sc.TWI || '--')}</td>
+                <td>${esc(sc.NGT || '--')}</td>
+                <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(h.Error || '')}">${esc(h.Error || '')}</td>
+            `;
+            tbody.appendChild(tr);
+        });
+    }).catch(() => {});
+}
+
+// --- Dates ---
+function refreshDates() {
+    api('download.ashx?action=dates').then(r => {
+        const sel = document.getElementById('dateSelect');
+        const current = sel.value;
+        sel.innerHTML = '';
+        (r.dates || []).forEach(d => {
+            const opt = document.createElement('option');
+            opt.value = d; opt.textContent = d;
+            sel.appendChild(opt);
+        });
+        // Add today if not present
+        const today = new Date().toLocaleDateString('en-CA'); // yyyy-MM-dd
+        if (sel.options.length === 0) {
+            const opt = document.createElement('option');
+            opt.value = today; opt.textContent = today + ' (today)';
+            sel.appendChild(opt);
+        }
+        if (current && [...sel.options].some(o => o.value === current)) {
+            sel.value = current;
+        }
+        loadDayData();
+    }).catch(() => {});
+}
+
+// --- Day data ---
+function loadDayData() {
+    const date = document.getElementById('dateSelect').value;
+    if (!date) { dayData = []; renderData(); return; }
+
+    fetch('download.ashx?date=' + encodeURIComponent(date))
+        .then(r => r.json())
+        .then(data => {
+            dayData = Array.isArray(data) ? data : [];
+            renderData();
+        })
+        .catch(() => { dayData = []; renderData(); });
+}
+
+// --- Render data ---
+function renderData() {
+    renderSummary();
+    renderSortTab('sunrise', 'Sunrise');
+    renderSortTab('daysort', 'Daysort');
+    renderSortTab('twilight', 'Twilight');
+    renderSortTab('night', 'Night');
+}
+
+function renderSummary() {
+    const el = document.getElementById('summaryContent');
+    if (dayData.length === 0) { el.innerHTML = '<div class="empty-state">No data for this date</div>'; return; }
+
+    // Build summary: one row per sort, columns = time intervals
+    const sortNames = ['Sunrise', 'Daysort', 'Twilight', 'Night'];
+    const times = dayData.map(s => s.fetchedAtCentral || formatUtc(s.fetchedAtUtc));
+
+    let html = '<div class="table-scroll"><table class="data-table"><thead><tr><th>Sort</th>';
+    times.forEach(t => html += '<th>' + esc(t) + '</th>');
+    html += '</tr></thead><tbody>';
+
+    sortNames.forEach(sortName => {
+        html += '<tr><td><strong>' + esc(sortName) + '</strong></td>';
+        dayData.forEach(snapshot => {
+            const val = getSortTotal(snapshot, sortName);
+            html += '<td>' + esc(val) + '</td>';
+        });
+        html += '</tr>';
+    });
+
+    html += '</tbody></table></div>';
+    el.innerHTML = html;
+}
+
+function getSortTotal(snapshot, sortName) {
+    // Look in detailedRows for the Totals row, then find the column starting with sortName
+    if (!snapshot.detailedRows || !snapshot.detailedColumns) return '--';
+
+    const cols = snapshot.detailedColumns || [];
+    const firstCol = cols[0] || '';
+
+    let totalsRow = null;
+    (snapshot.detailedRows || []).forEach(r => {
+        if (firstCol && r[firstCol] && r[firstCol].trim().toLowerCase() === 'totals') totalsRow = r;
+        else {
+            for (const v of Object.values(r)) {
+                if (v && v.trim().toLowerCase() === 'totals') { totalsRow = r; break; }
+            }
+        }
+    });
+
+    if (!totalsRow) return '--';
+
+    for (const col of cols) {
+        if (col.toLowerCase().startsWith(sortName.toLowerCase())) {
+            return totalsRow[col] || '0';
+        }
+    }
+    return '--';
+}
+
+function renderSortTab(tabId, sortName) {
+    const el = document.getElementById(tabId + 'Content');
+    if (dayData.length === 0) { el.innerHTML = '<div class="empty-state">No data</div>'; return; }
+
+    // Use latest snapshot's detailed table, filtered to show the column for this sort
+    const latest = dayData[dayData.length - 1];
+    if (!latest || !latest.detailedFound || !latest.detailedColumns || !latest.detailedRows) {
+        el.innerHTML = '<div class="empty-state">No detailed data available</div>';
+        return;
+    }
+
+    const cols = latest.detailedColumns;
+    const firstCol = cols[0] || '';
+    // Find the column for this sort
+    const sortCol = cols.find(c => c.toLowerCase().startsWith(sortName.toLowerCase()));
+    if (!sortCol) {
+        el.innerHTML = '<div class="empty-state">No ' + sortName + ' data in latest fetch</div>';
+        return;
+    }
+
+    // Show dimension breakdown table
+    let html = '<h4 style="margin-bottom:10px;">Latest fetch: ' + esc(latest.fetchedAtCentral || '') + '</h4>';
+    html += '<div class="table-scroll"><table class="data-table"><thead><tr>';
+    html += '<th>' + esc(firstCol || 'Dimension') + '</th>';
+    html += '<th>' + esc(sortCol) + '</th>';
+    html += '</tr></thead><tbody>';
+
+    latest.detailedRows.forEach(row => {
+        html += '<tr>';
+        html += '<td>' + esc(row[firstCol] || '') + '</td>';
+        html += '<td>' + esc(row[sortCol] || '') + '</td>';
+        html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+
+    // Time-series of totals for this sort
+    if (dayData.length > 1) {
+        html += '<h4 style="margin:16px 0 10px;">Totals over time</h4>';
+        html += '<div class="table-scroll"><table class="data-table"><thead><tr><th>Time</th><th>' + esc(sortName) + ' Total</th></tr></thead><tbody>';
+        dayData.forEach(snap => {
+            const val = getSortTotal(snap, sortName);
+            html += '<tr><td>' + esc(snap.fetchedAtCentral || '') + '</td><td>' + esc(val) + '</td></tr>';
+        });
+        html += '</tbody></table></div>';
+    }
+
+    el.innerHTML = html;
+}
+
+// --- Tab switching ---
+function switchTab(tabId) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tabId));
+    document.querySelectorAll('.tab-content').forEach(tc => tc.classList.toggle('active', tc.id === 'tab-' + tabId));
+}
+
+// --- Excel download ---
+function downloadExcel() {
+    if (dayData.length === 0) { alert('No data to download'); return; }
+    if (typeof XLSX === 'undefined') { alert('SheetJS library not loaded'); return; }
+
+    const wb = XLSX.utils.book_new();
+    const date = document.getElementById('dateSelect').value || 'data';
+    const sortNames = ['Sunrise', 'Daysort', 'Twilight', 'Night'];
+    const times = dayData.map(s => s.fetchedAtCentral || formatUtc(s.fetchedAtUtc));
+
+    // Summary sheet — only sorts with data
+    const summaryRows = [['Sort', ...times]];
+    const sortsWithData = [];
+
+    sortNames.forEach(sn => {
+        const row = [sn];
+        let hasData = false;
+        dayData.forEach(snap => {
+            const val = getSortTotal(snap, sn);
+            row.push(val);
+            if (val !== '--' && val !== '0' && val !== 'no data') hasData = true;
+        });
+        if (hasData) {
+            summaryRows.push(row);
+            sortsWithData.push(sn);
+        }
+    });
+
+    if (summaryRows.length > 1) {
+        const ws = XLSX.utils.aoa_to_sheet(summaryRows);
+        XLSX.utils.book_append_sheet(wb, ws, 'Summary');
+    }
+
+    // Per-sort sheets — only for sorts with data
+    sortsWithData.forEach(sortName => {
+        const latest = dayData[dayData.length - 1];
+        if (!latest || !latest.detailedColumns || !latest.detailedRows) return;
+
+        const cols = latest.detailedColumns;
+        const firstCol = cols[0] || '';
+        const sortCol = cols.find(c => c.toLowerCase().startsWith(sortName.toLowerCase()));
+        if (!sortCol) return;
+
+        const rows = [[firstCol || 'Dimension', sortCol]];
+        latest.detailedRows.forEach(r => {
+            rows.push([r[firstCol] || '', r[sortCol] || '']);
+        });
+
+        // Add time-series
+        rows.push([]);
+        rows.push(['Time', sortName + ' Total']);
+        dayData.forEach(snap => {
+            const val = getSortTotal(snap, sortName);
+            rows.push([snap.fetchedAtCentral || '', val]);
+        });
+
+        const ws = XLSX.utils.aoa_to_sheet(rows);
+        XLSX.utils.book_append_sheet(wb, ws, sortName);
+    });
+
+    XLSX.writeFile(wb, 'SmallsDimensions_' + date + '.xlsx');
+}
+
+// --- Helpers ---
+function esc(s) {
+    if (!s) return '';
+    const div = document.createElement('div');
+    div.textContent = s;
+    return div.innerHTML;
+}
+
+// --- Init ---
+window.addEventListener('DOMContentLoaded', () => {
+    loadConfig();
+    pollStatus();
+    loadHistory();
+    refreshDates();
+});
+</script>
+</body>
+</html>
