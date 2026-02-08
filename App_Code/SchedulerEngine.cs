@@ -39,8 +39,8 @@ public static class SchedulerEngine
             CurrentConfig = config ?? LoadConfig(appDataPath);
             _appDataPath = appDataPath;
 
-            if (!Directory.Exists(_appDataPath))
-                Directory.CreateDirectory(_appDataPath);
+            // Verify the storage folder exists and is writable (throws descriptive error on failure)
+            StoragePathHelper.EnsureWritable(_appDataPath);
 
             int intervalMs = (CurrentConfig.IntervalMinutes > 0 ? CurrentConfig.IntervalMinutes : 30) * 60 * 1000;
 
@@ -122,8 +122,7 @@ public static class SchedulerEngine
 
     public static void SaveConfig(string appDataPath, SchedulerConfig config)
     {
-        if (!Directory.Exists(appDataPath))
-            Directory.CreateDirectory(appDataPath);
+        StoragePathHelper.EnsureWritable(appDataPath);
 
         string path = ConfigFilePath(appDataPath);
         string json = _json.Serialize(config);

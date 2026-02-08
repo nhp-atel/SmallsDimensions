@@ -219,3 +219,72 @@ SmallsDimensions/
 2. **SizeReportFetcher** connects to the ATM system (`10.66.225.108`), submits the form, polls the hidden endpoint until the unescape payload appears, then parses the HTML report
 3. **DailyDataStore** appends each fetch result as a JSON snapshot to `App_Data/{date}/consolidated.json`
 4. The **dashboard** reads this consolidated data and renders it in tables, with client-side Excel generation via SheetJS
+
+## Deployment & IIS Configuration
+
+### One-Time IIS Settings
+
+Set these via **IIS Manager** on the server (not web.config):
+
+| Setting | Location | Value | Why |
+|---|---|---|---|
+| Idle Time-out | App Pool → Advanced Settings | `0` | Prevents IIS from killing the scheduler after 20 min of no requests |
+| Start Mode | App Pool → Advanced Settings | `AlwaysRunning` | Starts the app pool immediately when IIS starts |
+| Preload Enabled | Site → Advanced Settings | `True` | Sends a warm-up request on start, triggering `Application_Start` |
+| Application Initialization | Server Manager → Add Roles/Features → IIS → App Development | Enabled | Required Windows feature for preload to work |
+
+### App_Data Permissions
+
+The IIS worker process identity needs **Modify** permission on the `App_Data` folder. Without this you'll get:
+
+```
+Access to the path 'C:\inetpub\wwwroot\Middleware_alocal\App_Data' is denied.
+```
+
+**To fix**, open an admin Command Prompt and run:
+
+```cmd
+icacls "C:\inetpub\wwwroot\Middleware_alocal\App_Data" /grant "IIS AppPool\Middleware_alocal":(OI)(CI)M
+```
+
+Replace `Middleware_alocal` with your actual app pool name. If the pool runs as a domain account (e.g. `DOMAIN\svcSmalls`), use that instead.
+
+You can also set this via Explorer: right-click `App_Data` → Properties → Security → Edit → Add → type the identity → check Modify → OK.
+
+### How to Find Your App Pool Identity
+
+The error message now includes the exact identity and path. If you hit the error via a browser request, the JSON response shows:
+
+```
+PERMISSION ERROR - Storage path is not writable.
+  Path     : C:\inetpub\wwwroot\Middleware_alocal\App_Data
+  Identity : IIS AppPool\Middleware_alocal
+  Fix      : Grant Modify permission to 'IIS AppPool\Middleware_alocal' on folder '...'
+             icacls "..." /grant "IIS AppPool\Middleware_alocal":(OI)(CI)M
+```
+
+If the error happens during auto-start (no browser request), check **Windows Event Viewer** → Windows Logs → Application for the same message.
+
+### Optional: Override Storage Path
+
+If you can't change permissions on the site folder, set an alternative writable path in `Web.config`:
+
+```xml
+<appSettings>
+  <add key="AppDataStoragePath" value="D:\SmallsData\App_Data" />
+</appSettings>
+```
+
+All code paths (Global.asax, scheduler, config, download) will use this path instead. The target folder still needs Modify permission for the app pool identity.
+
+### web.config Auto-Start Support
+
+The `web.config` includes an `applicationInitialization` section that works with the IIS settings above:
+
+```xml
+<applicationInitialization doAppInitAfterRestart="true">
+  <add initializationPage="/" />
+</applicationInitialization>
+```
+
+This tells IIS to send a warm-up request to `/` whenever the app pool starts or recycles, which triggers `Application_Start` in `Global.asax`, which auto-starts the scheduler (if `AutoStart` is enabled in the config)

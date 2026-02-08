@@ -16,7 +16,7 @@ public class DownloadHandler : IHttpHandler
         context.Response.AddHeader("Cache-Control", "no-cache, no-store");
 
         var json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
-        string appDataPath = context.Server.MapPath("~/App_Data");
+        string appDataPath = StoragePathHelper.Resolve(context.Server.MapPath("~/App_Data"));
 
         try
         {
