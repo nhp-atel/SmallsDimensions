@@ -25,6 +25,27 @@ public class SizeReportJsonHandler2 : IHttpHandler
 
         try
         {
+            bool debug = (context.Request["debug"] ?? "").Trim() == "1";
+
+            void Log(string message)
+            {
+                if (!debug) return;
+                try
+                {
+                    string logPath = context.Server.MapPath("~/App_Data/size_report_debug.log");
+                    string line = DateTime.UtcNow.ToString("o") + " | sizeReportJsonHandler | " + message + Environment.NewLine;
+                    File.AppendAllText(logPath, line);
+                }
+                catch
+                {
+                    // Never let logging break the request.
+                }
+            }
+
+            Log("Request start. Url=" + context.Request.RawUrl +
+                " Method=" + context.Request.HttpMethod +
+                " IP=" + context.Request.UserHostAddress);
+
             // Read inputs (same as before)
             string date = (context.Request["date"] ?? SizeReportFetcher.GetTodayCentral_yyyyMMdd()).Trim();
 
@@ -67,8 +88,15 @@ public class SizeReportJsonHandler2 : IHttpHandler
             bool log = (context.Request["log"] ?? "").Trim() == "1";
             string logPath = (context.Request["logPath"] ?? "").Trim();
 
+            Log("Inputs: date=" + date + " report=" + report + " l=" + l + " w=" + w + " h=" + h +
+                " sorts=" + string.Join("|", sorts) + " maxPolls=" + maxPolls + " delayMs=" + delayMs +
+                " log=" + log + " logPath=" + (string.IsNullOrEmpty(logPath) ? "(default)" : logPath));
+
             // Delegate to shared fetcher
             var result = SizeReportFetcher.FetchAndParse(date, report, l, w, h, sorts, maxPolls, delayMs);
+            Log("FetchAndParse done. Hops=" + (result.Hops == null ? 0 : result.Hops.Count) +
+                " ParsedNull=" + (result.Parsed == null) +
+                " DecodedHtmlBytes=" + ((result.DecodedHtml ?? "").Length));
 
             // Optional CSV logging (same as original)
             string logFolderUsed = null;
@@ -83,16 +111,20 @@ public class SizeReportJsonHandler2 : IHttpHandler
                     logFolderUsed = ResolveLogFolder(context, logPath);
                     logFilesTouched = AppendPerSortCsv(logFolderUsed, date, report, l, w, h, sorts, result.Parsed);
                     logAppended = true;
+                    Log("CSV log appended. Folder=" + logFolderUsed + " Files=" + string.Join("|", logFilesTouched));
                 }
                 catch (Exception lex)
                 {
                     logError = lex.ToString();
+                    Log("CSV log error: " + lex.Message);
                 }
             }
 
             // Build response (same structure as original)
             string submitUrl = SizeReportFetcher.BuildSubmitUrl(date, report, l, w, h, sorts);
             string hiddenUrl = SizeReportFetcher.BuildHiddenUrl(date, report, l, w, h, sorts);
+
+            Log("URLs: submit=" + submitUrl + " hidden=" + hiddenUrl);
 
             context.Response.Write(new JavaScriptSerializer().Serialize(new
             {
@@ -123,9 +155,22 @@ public class SizeReportJsonHandler2 : IHttpHandler
                 textPreview = "",
                 parsed = result.Parsed
             }));
+
+            Log("Response written OK.");
         }
         catch (Exception ex)
         {
+            try
+            {
+                string logPath = context.Server.MapPath("~/App_Data/size_report_debug.log");
+                string line = DateTime.UtcNow.ToString("o") + " | sizeReportJsonHandler | ERROR: " + ex + Environment.NewLine;
+                File.AppendAllText(logPath, line);
+            }
+            catch
+            {
+                // ignore logging failures
+            }
+
             context.Response.StatusCode = 500;
             context.Response.Write(new JavaScriptSerializer().Serialize(new
             {

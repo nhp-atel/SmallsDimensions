@@ -19,6 +19,27 @@ public class SizeReportJsonHandlerLegacy : IHttpHandler
     {
         try
         {
+            bool debug = (context.Request["debug"] ?? "").Trim() == "1";
+
+            void Log(string message)
+            {
+                if (!debug) return;
+                try
+                {
+                    string logPath = context.Server.MapPath("~/App_Data/size_report_debug.log");
+                    string line = DateTime.UtcNow.ToString("o") + " | size_report_json | " + message + Environment.NewLine;
+                    File.AppendAllText(logPath, line);
+                }
+                catch
+                {
+                    // Never let logging break the request.
+                }
+            }
+
+            Log("Request start. Url=" + context.Request.RawUrl +
+                " Method=" + context.Request.HttpMethod +
+                " IP=" + context.Request.UserHostAddress);
+
             // -----------------------------
             // Read inputs
             // -----------------------------
@@ -65,6 +86,10 @@ public class SizeReportJsonHandlerLegacy : IHttpHandler
             int maxPolls = ParseIntOrDefault(context.Request["maxPolls"], 25);
             int delayMs = ParseIntOrDefault(context.Request["delayMs"], 1200);
 
+            Log("Inputs: date=" + date + " report=" + report + " l=" + l + " w=" + w + " h=" + h +
+                " sorts=" + string.Join("|", sorts) + " maxPolls=" + maxPolls + " delayMs=" + delayMs +
+                " format=" + (format ?? "") + " exportCsv=" + exportCsv);
+
             // -----------------------------
             // Requests
             // -----------------------------
@@ -74,14 +99,17 @@ public class SizeReportJsonHandlerLegacy : IHttpHandler
             // 1) establish session
             HttpResponseInfo warm = HttpGetInfo(BASE_URL, cookies, null);
             hops.Add("GET form status=" + warm.StatusCode + " final=" + warm.FinalUrl + " bytes=" + warm.Bytes);
+            Log("Warm GET status=" + warm.StatusCode + " final=" + warm.FinalUrl + " bytes=" + warm.Bytes);
 
             // 2) trigger generation
             string submitUrl = BuildSubmitUrl(date, report, l, w, h, sorts);
             HttpResponseInfo submitResp = HttpGetInfo(submitUrl, cookies, BASE_URL);
             hops.Add("GET submit status=" + submitResp.StatusCode + " final=" + submitResp.FinalUrl + " bytes=" + submitResp.Bytes);
+            Log("Submit GET status=" + submitResp.StatusCode + " final=" + submitResp.FinalUrl + " bytes=" + submitResp.Bytes);
 
             // 3) poll hidden endpoint
             string hiddenUrl = BuildHiddenUrl(date, report, l, w, h, sorts);
+            Log("Hidden URL=" + hiddenUrl);
 
             string finalHiddenPageHtml = null;
             string finalDecodedHtml = null;
@@ -96,6 +124,7 @@ public class SizeReportJsonHandlerLegacy : IHttpHandler
 
                 bool hasEncoded = ContainsUnescapePayload(lastHiddenHtml);
                 hops.Add("POLL " + i + " status=" + poll.StatusCode + " bytes=" + poll.Bytes + " hasUnescape=" + hasEncoded);
+                Log("POLL " + i + " status=" + poll.StatusCode + " bytes=" + poll.Bytes + " hasUnescape=" + hasEncoded);
 
                 if (hasEncoded)
                 {
@@ -108,6 +137,7 @@ public class SizeReportJsonHandlerLegacy : IHttpHandler
                     {
                         finalHiddenPageHtml = lastHiddenHtml;
                         finalDecodedHtml = decoded;
+                        Log("Decoded payload accepted at poll " + i + ". DecodedLen=" + decoded.Length);
                         break;
                     }
                 }
@@ -115,12 +145,15 @@ public class SizeReportJsonHandlerLegacy : IHttpHandler
                 System.Threading.Thread.Sleep(delayMs);
             }
 
+            Log("Polling complete. finalDecodedLen=" + ((finalDecodedHtml ?? "").Length));
+
             // -----------------------------
             // Parse
             // -----------------------------
             string reportText = HtmlToText(finalDecodedHtml ?? "");
             string textPreview = reportText.Substring(0, Math.Min(reportText.Length, 2000));
             object parsed = SizeReportParserLegacy.Parse(reportText, finalDecodedHtml ?? "");
+            Log("Parsed. reportTextLen=" + reportText.Length);
 
             // -----------------------------
             // CSV Export (Excel opens this)
@@ -189,6 +222,7 @@ public class SizeReportJsonHandlerLegacy : IHttpHandler
                 }
 
                 context.Response.Flush();
+                Log("CSV response written. Columns=" + columns.Count + " Rows=" + rowsObj.Length);
                 return;
             }
 
@@ -225,9 +259,22 @@ public class SizeReportJsonHandlerLegacy : IHttpHandler
                 textPreview = textPreview,
                 parsed = parsed
             }));
+
+            Log("JSON response written OK.");
         }
         catch (Exception ex)
         {
+            try
+            {
+                string logPath = context.Server.MapPath("~/App_Data/size_report_debug.log");
+                string line = DateTime.UtcNow.ToString("o") + " | size_report_json | ERROR: " + ex + Environment.NewLine;
+                File.AppendAllText(logPath, line);
+            }
+            catch
+            {
+                // ignore logging failures
+            }
+
             context.Response.StatusCode = 500;
             context.Response.ContentType = "application/json";
             context.Response.ContentEncoding = Encoding.UTF8;
