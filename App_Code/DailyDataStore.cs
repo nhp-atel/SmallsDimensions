@@ -19,7 +19,14 @@ public static class DailyDataStore
     /// </summary>
     public static void Append(string appDataPath, string date, FetchResult result)
     {
-        if (result == null || result.Parsed == null) return;
+        SizeReportFetcher.DebugLog("STORE", string.Format("STORE_APPEND date={0} resultNull={1} parsedNull={2}",
+            date, result == null, result != null ? (result.Parsed == null).ToString() : "n/a"));
+
+        if (result == null || result.Parsed == null)
+        {
+            SizeReportFetcher.DebugLog("STORE", "STORE_SKIP result or parsed is null — nothing stored");
+            return;
+        }
 
         string dateFolder = Path.Combine(appDataPath, date);
         string filePath = Path.Combine(dateFolder, "consolidated.json");
@@ -36,6 +43,11 @@ public static class DailyDataStore
 
             string json = _json.Serialize(existing);
             File.WriteAllText(filePath, json, Encoding.UTF8);
+
+            SizeReportFetcher.DebugLog("STORE", string.Format("STORE_WRITTEN path={0} snapshotCount={1} success={2} columns={3} rows={4}",
+                filePath, existing.Count, result.Success,
+                result.Parsed.DetailedColumns != null ? result.Parsed.DetailedColumns.Count : 0,
+                result.Parsed.DetailedRows != null ? result.Parsed.DetailedRows.Count : 0));
         }
     }
 

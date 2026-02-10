@@ -159,6 +159,9 @@ public static class SchedulerEngine
             string date = SizeReportFetcher.GetTodayCentral_yyyyMMdd();
             var sorts = config.Sorts ?? new List<string> { "ALL" };
 
+            SizeReportFetcher.DebugLog("SCHEDULER", string.Format("SCHEDULER_FETCH date={0} report={1} sorts={2}",
+                date, config.Report ?? "small", string.Join(",", sorts)));
+
             var result = SizeReportFetcher.FetchAndParse(
                 date,
                 config.Report ?? "small",
@@ -170,8 +173,16 @@ public static class SchedulerEngine
                 config.DelayMs > 0 ? config.DelayMs : 1200
             );
 
+            SizeReportFetcher.DebugLog("SCHEDULER", string.Format("SCHEDULER_RESULT success={0} error={1} hops={2} decodedHtmlBytes={3}",
+                result.Success, result.Error ?? "(none)",
+                result.Hops != null ? result.Hops.Count : 0,
+                result.DecodedHtml != null ? result.DecodedHtml.Length : 0));
+
             // Store data
             DailyDataStore.Append(appDataPath, date, result);
+
+            SizeReportFetcher.DebugLog("SCHEDULER", string.Format("SCHEDULER_STORED date={0} todayFetchCount={1}",
+                date, TodayFetchCount + 1));
 
             // Update state
             lock (_lock)
@@ -200,7 +211,8 @@ public static class SchedulerEngine
                     FetchedAtCentral = SizeReportFetcher.GetNowCentralFormatted(),
                     Success = result.Success,
                     Error = result.Error,
-                    SortCounts = sortSummary
+                    SortCounts = sortSummary,
+                    Hops = result.Hops ?? new List<string>()
                 });
 
                 if (_fetchHistory.Count > MaxHistoryEntries)
@@ -209,6 +221,8 @@ public static class SchedulerEngine
         }
         catch (Exception ex)
         {
+            SizeReportFetcher.DebugLog("SCHEDULER", string.Format("SCHEDULER_ERROR {0}", ex.Message));
+
             lock (_lock)
             {
                 LastError = ex.Message;
@@ -220,7 +234,8 @@ public static class SchedulerEngine
                     FetchedAtCentral = SizeReportFetcher.GetNowCentralFormatted(),
                     Success = false,
                     Error = ex.Message,
-                    SortCounts = new Dictionary<string, string>()
+                    SortCounts = new Dictionary<string, string>(),
+                    Hops = new List<string>()
                 });
 
                 if (_fetchHistory.Count > MaxHistoryEntries)
@@ -276,4 +291,5 @@ public class FetchHistoryEntry
     public bool Success { get; set; }
     public string Error { get; set; }
     public Dictionary<string, string> SortCounts { get; set; }
+    public List<string> Hops { get; set; }
 }

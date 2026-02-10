@@ -16,6 +16,65 @@ public static class SizeReportFetcher
     private const string BASE_URL = "http://10.66.225.108/atm/size_report.php";
     private const string HIDDEN_URL = "http://10.66.225.108/atm/size_report_hidden.php";
 
+    private static readonly object _logLock = new object();
+
+    // --- Debug Logging ---
+
+    public static void DebugLog(string component, string message)
+    {
+        try
+        {
+            string logDir = null;
+            if (HttpContext.Current != null)
+                logDir = HttpContext.Current.Server.MapPath("~/App_Data");
+            else
+                logDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "App_Data");
+
+            if (!Directory.Exists(logDir))
+                Directory.CreateDirectory(logDir);
+
+            string logPath = Path.Combine(logDir, "fetch_debug.log");
+            string entry = string.Format("[{0}] [{1}] {2}\n", DateTime.UtcNow.ToString("o"), component, message);
+
+            lock (_logLock)
+            {
+                // Auto-rotate: if file exceeds 500KB, keep last half
+                if (File.Exists(logPath))
+                {
+                    var fi = new FileInfo(logPath);
+                    if (fi.Length > 512000)
+                    {
+                        string all = File.ReadAllText(logPath);
+                        int mid = all.Length / 2;
+                        int nl = all.IndexOf('\n', mid);
+                        if (nl > 0)
+                            File.WriteAllText(logPath, all.Substring(nl + 1));
+                    }
+                }
+
+                File.AppendAllText(logPath, entry);
+            }
+        }
+        catch { }
+    }
+
+    private static string Preview(string s, int max)
+    {
+        if (string.IsNullOrEmpty(s)) return "(empty)";
+        if (s.Length <= max) return s.Replace("\n", "\\n").Replace("\r", "");
+        return s.Substring(0, max).Replace("\n", "\\n").Replace("\r", "") + "...";
+    }
+
+    // --- Report keyword detection ---
+
+    public static bool ContainsReportKeywords(string html)
+    {
+        if (string.IsNullOrEmpty(html)) return false;
+        return html.IndexOf("ATM Dimensional Statistics", StringComparison.OrdinalIgnoreCase) >= 0
+            || html.IndexOf("sizeDisplayData", StringComparison.OrdinalIgnoreCase) >= 0
+            || html.IndexOf("Detailed CSV", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
     public static FetchResult FetchAndParse(string date, string report, string l, string w, string h, List<string> sorts, int maxPolls = 25, int delayMs = 1200)
     {
         var result = new FetchResult();
@@ -32,16 +91,24 @@ public static class SizeReportFetcher
             h = (h ?? "7").Trim();
             if (sorts == null || sorts.Count == 0) sorts = new List<string> { "ALL" };
 
+            DebugLog("FETCHER", string.Format("START FetchAndParse date={0} report={1} l={2} w={3} h={4} sorts={5}",
+                date, report, l, w, h, string.Join(",", sorts)));
+
             var cookies = new CookieContainer();
 
             // 1) establish session
             HttpResponseInfo warm = HttpGetInfo(BASE_URL, cookies, null);
             result.Hops.Add("GET form status=" + warm.StatusCode + " final=" + warm.FinalUrl + " bytes=" + warm.Bytes);
+            DebugLog("FETCHER", string.Format("WARMUP status={0} bytes={1} finalUrl={2} bodyPreview={3}",
+                warm.StatusCode, warm.Bytes, warm.FinalUrl, Preview(warm.Body, 200)));
 
             // 2) trigger generation (form uses method=get)
             string submitUrl = BuildSubmitUrl(date, report, l, w, h, sorts);
             HttpResponseInfo submitResp = HttpGetInfo(submitUrl, cookies, BASE_URL);
+            bool submitHasKeywords = ContainsReportKeywords(submitResp.Body ?? "");
             result.Hops.Add("GET submit status=" + submitResp.StatusCode + " final=" + submitResp.FinalUrl + " bytes=" + submitResp.Bytes);
+            DebugLog("FETCHER", string.Format("SUBMIT status={0} bytes={1} containsKeywords={2} bodyPreview={3}",
+                submitResp.StatusCode, submitResp.Bytes, submitHasKeywords, Preview(submitResp.Body, 200)));
 
             // 3) poll hidden endpoint until it contains the unescape payload with report HTML
             string hiddenUrl = BuildHiddenUrl(date, report, l, w, h, sorts);
@@ -58,17 +125,20 @@ public static class SizeReportFetcher
                 lastHiddenHtml = poll.Body ?? "";
 
                 bool hasEncoded = ContainsUnescapePayload(lastHiddenHtml);
-                result.Hops.Add("POLL " + i + " status=" + poll.StatusCode + " bytes=" + poll.Bytes + " hasUnescape=" + hasEncoded);
+                bool hasDirectTable = ContainsReportKeywords(lastHiddenHtml);
+                result.Hops.Add("POLL " + i + " status=" + poll.StatusCode + " bytes=" + poll.Bytes +
+                    " hasUnescape=" + hasEncoded + " hasDirectTable=" + hasDirectTable);
+                DebugLog("FETCHER", string.Format("POLL {0}/{1} status={2} bytes={3} hasUnescape={4} hasDirectTable={5} bodyPreview={6}",
+                    i, maxPolls, poll.StatusCode, poll.Bytes, hasEncoded, hasDirectTable, Preview(lastHiddenHtml, 300)));
 
                 if (hasEncoded)
                 {
                     string decoded = ExtractAndDecodeUnescapePayload(lastHiddenHtml);
 
-                    if (!string.IsNullOrEmpty(decoded) &&
-                        (decoded.IndexOf("ATM Dimensional Statistics", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                         decoded.IndexOf("Detailed CSV", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                         decoded.IndexOf("sizeDisplayData", StringComparison.OrdinalIgnoreCase) >= 0))
+                    if (!string.IsNullOrEmpty(decoded) && ContainsReportKeywords(decoded))
                     {
+                        DebugLog("FETCHER", string.Format("UNESCAPE_FOUND decodedLength={0} containsKeywords={1} decodedPreview={2}",
+                            decoded.Length, true, Preview(decoded, 300)));
                         finalHiddenPageHtml = lastHiddenHtml;
                         finalDecodedHtml = decoded;
                         break;
@@ -78,16 +148,50 @@ public static class SizeReportFetcher
                 System.Threading.Thread.Sleep(delayMs);
             }
 
+            // --- Fallback strategies (Step 2c) ---
+            if (string.IsNullOrEmpty(finalDecodedHtml))
+            {
+                DebugLog("FETCHER", string.Format("POLL_EXHAUSTED no valid payload found in {0} polls. lastHiddenHtml bytes={1}",
+                    maxPolls, (lastHiddenHtml ?? "").Length));
+
+                // Fallback A: check submit response body for direct HTML data
+                if (submitHasKeywords)
+                {
+                    finalDecodedHtml = submitResp.Body;
+                    result.Hops.Add("FALLBACK: used submit response body (direct HTML, " + (submitResp.Body ?? "").Length + " bytes)");
+                    DebugLog("FETCHER", string.Format("FALLBACK_SUBMIT using submit response as direct HTML. bytes={0}", (submitResp.Body ?? "").Length));
+                }
+                // Fallback B: check last hidden poll body for direct HTML data
+                else if (!string.IsNullOrEmpty(lastHiddenHtml) && ContainsReportKeywords(lastHiddenHtml))
+                {
+                    finalDecodedHtml = lastHiddenHtml;
+                    result.Hops.Add("FALLBACK: used raw hidden response (direct HTML, " + lastHiddenHtml.Length + " bytes)");
+                    DebugLog("FETCHER", string.Format("FALLBACK_HIDDEN using raw hidden response as direct HTML. bytes={0}", lastHiddenHtml.Length));
+                }
+            }
+
             // Parse
+            DebugLog("FETCHER", string.Format("PARSING decodedHtml is {0}",
+                string.IsNullOrEmpty(finalDecodedHtml) ? "null/empty" : (finalDecodedHtml.Length + " bytes")));
+
             string reportText = HtmlToText(finalDecodedHtml ?? "");
             result.Parsed = SizeReportParser.Parse(reportText, finalDecodedHtml ?? "");
             result.DecodedHtml = finalDecodedHtml;
             result.Success = (result.Parsed != null && result.Parsed.DetailedFound);
+
+            DebugLog("FETCHER", string.Format("PARSED detailedFound={0} columns={1}:{2} rows={3} sortBlocks={4} success={5}",
+                result.Parsed != null ? result.Parsed.DetailedFound.ToString() : "null",
+                result.Parsed != null && result.Parsed.DetailedColumns != null ? result.Parsed.DetailedColumns.Count.ToString() : "0",
+                result.Parsed != null && result.Parsed.DetailedColumns != null ? string.Join(",", result.Parsed.DetailedColumns) : "",
+                result.Parsed != null && result.Parsed.DetailedRows != null ? result.Parsed.DetailedRows.Count.ToString() : "0",
+                result.Parsed != null && result.Parsed.SortBlocks != null ? result.Parsed.SortBlocks.Count.ToString() : "0",
+                result.Success));
         }
         catch (Exception ex)
         {
             result.Error = ex.Message;
             result.Success = false;
+            DebugLog("FETCHER", string.Format("ERROR {0}: {1}", ex.GetType().Name, ex.Message));
         }
 
         return result;
@@ -205,14 +309,14 @@ public static class SizeReportFetcher
     public static bool ContainsUnescapePayload(string html)
     {
         if (string.IsNullOrEmpty(html)) return false;
-        return Regex.IsMatch(html, @"unescape\(\s*(['""])[\s\S]*?\1\s*\)", RegexOptions.IgnoreCase);
+        return Regex.IsMatch(html, @"(?:unescape|decodeURIComponent|decodeURI)\(\s*(['""])[\s\S]*?\1\s*\)", RegexOptions.IgnoreCase);
     }
 
     public static string ExtractAndDecodeUnescapePayload(string html)
     {
         if (string.IsNullOrEmpty(html)) return null;
 
-        Match m = Regex.Match(html, @"unescape\(\s*(?<q>['""])(?<p>[\s\S]*?)\k<q>\s*\)", RegexOptions.IgnoreCase);
+        Match m = Regex.Match(html, @"(?:unescape|decodeURIComponent|decodeURI)\(\s*(?<q>['""])(?<p>[\s\S]*?)\k<q>\s*\)", RegexOptions.IgnoreCase);
         if (!m.Success) return null;
 
         string payload = m.Groups["p"].Value;
@@ -255,7 +359,8 @@ public static class SizeReportFetcher
 
         Dictionary<string, string> totalsRow = null;
 
-        if (!string.IsNullOrEmpty(firstCol))
+        // Step 3d: use firstCol != null instead of !IsNullOrEmpty so empty-string key "" still works
+        if (firstCol != null)
             totalsRow = parsed.DetailedRows.FirstOrDefault(r =>
                 r.ContainsKey(firstCol) && string.Equals((r[firstCol] ?? "").Trim(), "Totals", StringComparison.OrdinalIgnoreCase));
 
@@ -346,7 +451,8 @@ public static class SizeReportParser
             var firstCol = parsed.DetailedColumns != null && parsed.DetailedColumns.Count > 0 ? parsed.DetailedColumns[0] : null;
 
             Dictionary<string, string> totalsRow = null;
-            if (!string.IsNullOrEmpty(firstCol))
+            // Step 3d: use firstCol != null instead of !IsNullOrEmpty
+            if (firstCol != null)
                 totalsRow = parsed.DetailedRows.FirstOrDefault(r => r.ContainsKey(firstCol) && (r[firstCol] ?? "").Trim().Equals("Totals", StringComparison.OrdinalIgnoreCase));
             else
                 totalsRow = parsed.DetailedRows.FirstOrDefault(r => r.Values.Any(v => (v ?? "").Trim().Equals("Totals", StringComparison.OrdinalIgnoreCase)));
@@ -403,16 +509,53 @@ public static class SizeReportParser
         var result = new DetailedTable();
 
         if (string.IsNullOrWhiteSpace(decodedHtml))
+        {
+            SizeReportFetcher.DebugLog("TABLE_PARSE", "input html is null/empty");
             return result;
+        }
 
+        SizeReportFetcher.DebugLog("TABLE_PARSE", string.Format("input html bytes={0}", decodedHtml.Length));
+
+        // Try finding table by sizeDisplayData class
         var tableMatch = Regex.Match(
             decodedHtml,
             @"<table[^>]*class\s*=\s*""[^""]*sizeDisplayData[^""]*""[^>]*>(?<t>[\s\S]*?)</table>",
             RegexOptions.IgnoreCase
         );
 
+        bool foundByClass = tableMatch.Success;
+        SizeReportFetcher.DebugLog("TABLE_PARSE", string.Format("TABLE_SEARCH sizeDisplayData class found={0}", foundByClass));
+
+        // Step 3a: Fallback table finding — iterate all tables
         if (!tableMatch.Success)
+        {
+            var allTables = Regex.Matches(decodedHtml, @"<table[^>]*>(?<t>[\s\S]*?)</table>", RegexOptions.IgnoreCase);
+            bool matchByContent = false;
+
+            SizeReportFetcher.DebugLog("TABLE_PARSE", string.Format("TABLE_FALLBACK searching all tables. found={0}", allTables.Count));
+
+            foreach (Match tbl in allTables)
+            {
+                string tblContent = tbl.Groups["t"].Value;
+                bool hasTotals = tblContent.IndexOf("Totals", StringComparison.OrdinalIgnoreCase) >= 0;
+                bool hasDimension = Regex.IsMatch(tblContent, @"P\d{2}", RegexOptions.IgnoreCase);
+
+                if (hasTotals && hasDimension)
+                {
+                    tableMatch = tbl;
+                    matchByContent = true;
+                    break;
+                }
+            }
+
+            SizeReportFetcher.DebugLog("TABLE_PARSE", string.Format("TABLE_FALLBACK Match by Totals+dimensions={0}", matchByContent));
+        }
+
+        if (!tableMatch.Success)
+        {
+            SizeReportFetcher.DebugLog("TABLE_PARSE", "TABLE_NOT_FOUND no matching table in HTML");
             return result;
+        }
 
         result.Found = true;
 
@@ -433,11 +576,33 @@ public static class SizeReportParser
             return s;
         };
 
+        // Step 3b: Try <th> headers first, fallback to <td>
         var headerCells = Regex.Matches(rowMatches[0].Groups["r"].Value, @"<th[^>]*>(?<c>[\s\S]*?)</th>", RegexOptions.IgnoreCase);
+        bool usedTdFallback = false;
+
+        if (headerCells.Count == 0)
+        {
+            headerCells = Regex.Matches(rowMatches[0].Groups["r"].Value, @"<td[^>]*>(?<c>[\s\S]*?)</td>", RegexOptions.IgnoreCase);
+            usedTdFallback = true;
+        }
+
         foreach (Match c in headerCells)
             result.Columns.Add(strip(c.Groups["c"].Value));
 
-        for (int i = 1; i < rowMatches.Count; i++)
+        // Step 3c: Handle empty first column header
+        if (result.Columns.Count > 0 && string.IsNullOrWhiteSpace(result.Columns[0]))
+        {
+            result.Columns[0] = "Dimension";
+            SizeReportFetcher.DebugLog("TABLE_PARSE", "HEADER_EMPTY first column was empty, renamed to 'Dimension'");
+        }
+
+        SizeReportFetcher.DebugLog("TABLE_PARSE", string.Format("HEADERS <th> count={0}. Falling back to <td>={1}. Final columns=[{2}]",
+            usedTdFallback ? 0 : headerCells.Count, usedTdFallback, string.Join(",", result.Columns)));
+
+        // If headers came from <td>, data rows start at index 1; otherwise index 1 as before
+        int dataStartRow = 1;
+
+        for (int i = dataStartRow; i < rowMatches.Count; i++)
         {
             var cellMatches = Regex.Matches(rowMatches[i].Groups["r"].Value, @"<t[dh][^>]*>(?<c>[\s\S]*?)</t[dh]>", RegexOptions.IgnoreCase);
             if (cellMatches.Count == 0) continue;
@@ -453,6 +618,30 @@ public static class SizeReportParser
 
             result.Rows.Add(dict);
         }
+
+        SizeReportFetcher.DebugLog("TABLE_PARSE", string.Format("ROWS extracted {0} data rows.{1}",
+            result.Rows.Count,
+            result.Rows.Count > 0 ? string.Format(" First row keys=[{0}] values=[{1}]",
+                string.Join(",", result.Rows[0].Keys),
+                string.Join(",", result.Rows[0].Values)) : ""));
+
+        // Log Totals row search
+        Dictionary<string, string> totalsRowCheck = null;
+        string totalsMethod = "notfound";
+        if (result.Columns.Count > 0)
+        {
+            string fc = result.Columns[0];
+            totalsRowCheck = result.Rows.FirstOrDefault(r =>
+                r.ContainsKey(fc) && (r[fc] ?? "").Trim().Equals("Totals", StringComparison.OrdinalIgnoreCase));
+            if (totalsRowCheck != null) totalsMethod = "firstCol";
+        }
+        if (totalsRowCheck == null)
+        {
+            totalsRowCheck = result.Rows.FirstOrDefault(r =>
+                r.Values.Any(v => (v ?? "").Trim().Equals("Totals", StringComparison.OrdinalIgnoreCase)));
+            if (totalsRowCheck != null) totalsMethod = "fallback";
+        }
+        SizeReportFetcher.DebugLog("TABLE_PARSE", string.Format("TOTALS_ROW found={0} method={1}", totalsRowCheck != null, totalsMethod));
 
         return result;
     }

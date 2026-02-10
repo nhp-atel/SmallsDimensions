@@ -151,6 +151,18 @@ input:focus, select:focus { outline: none; border-color: var(--primary); box-sha
 
 .loading { text-align: center; padding: 40px; color: var(--text-muted); }
 .empty-state { text-align: center; padding: 40px; color: var(--text-muted); font-style: italic; }
+
+/* Diagnostic panel */
+.diag-panel { margin-top: 12px; padding: 14px; background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; font-size: 0.82rem; display: none; }
+.diag-panel pre { white-space: pre-wrap; word-break: break-all; max-height: 400px; overflow: auto; background: #1e293b; color: #e2e8f0; padding: 12px; border-radius: 6px; font-size: 0.78rem; margin-top: 8px; }
+.diag-summary { padding: 8px 12px; border-radius: 6px; font-weight: 600; margin-bottom: 8px; }
+.diag-summary.success { background: #dcfce7; color: #166534; }
+.diag-summary.fallback { background: #fef3c7; color: #92400e; }
+.diag-summary.fail { background: #fee2e2; color: #991b1b; }
+
+/* Hops detail */
+.hops-toggle { cursor: pointer; color: var(--primary); font-size: 0.75rem; text-decoration: underline; }
+.hops-detail { display: none; padding: 6px; background: #f8fafc; border-radius: 4px; margin-top: 4px; font-size: 0.72rem; white-space: pre-wrap; word-break: break-all; max-height: 150px; overflow: auto; }
 </style>
 </head>
 <body>
@@ -222,8 +234,18 @@ input:focus, select:focus { outline: none; border-color: var(--primary); box-sha
                 <button class="btn btn-success" id="btnStart" onclick="startScheduler()">Start Scheduler</button>
                 <button class="btn btn-danger" id="btnStop" onclick="stopScheduler()" disabled>Stop Scheduler</button>
                 <button class="btn btn-outline" id="btnFetchNow" onclick="fetchNow()">Fetch Now</button>
+                <button class="btn btn-outline" id="btnTestConn" onclick="testConnection()" style="border-color: var(--warning); color: var(--warning);">Test Connection</button>
             </div>
             <div id="controlMsg" style="margin-top: 10px; font-size: 0.85rem;"></div>
+            <div id="diagPanel" class="diag-panel">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px;">
+                    <strong>Connection Diagnostic</strong>
+                    <button class="btn btn-outline" onclick="document.getElementById('diagPanel').style.display='none'" style="padding:4px 10px; font-size:0.75rem;">Close</button>
+                </div>
+                <div id="diagSummary" class="diag-summary"></div>
+                <div id="diagDetails"></div>
+                <pre id="diagRaw"></pre>
+            </div>
         </div>
     </div>
     <div class="card">
@@ -311,6 +333,7 @@ input:focus, select:focus { outline: none; border-color: var(--primary); box-sha
                     <th>TWI</th>
                     <th>NGT</th>
                     <th>Error</th>
+                    <th>Details</th>
                 </tr></thead>
                 <tbody id="historyTbody"></tbody>
             </table>
@@ -481,11 +504,19 @@ function formatUtc(isoStr) {
 // --- History ---
 function loadHistory() {
     api('scheduler.ashx?action=history').then(r => {
+        console.log('[SmallsDim] history entries:', (r.history || []).length,
+            'latest:', (r.history || [])[0]);
         const tbody = document.getElementById('historyTbody');
         tbody.innerHTML = '';
-        (r.history || []).forEach(h => {
+        (r.history || []).forEach((h, idx) => {
             const tr = document.createElement('tr');
             const sc = h.SortCounts || {};
+            const hops = h.Hops || [];
+            const hopsId = 'hops_' + idx;
+            const hasFallback = hops.some(hp => hp.indexOf('FALLBACK') >= 0);
+            const hopsPreview = hops.length > 0
+                ? (hasFallback ? 'FALLBACK' : hops.length + ' hops')
+                : '--';
             tr.innerHTML = `
                 <td>${esc(h.FetchedAtCentral || '')}</td>
                 <td>${h.Success ? '<span class="badge-ok">OK</span>' : '<span class="badge-err">FAIL</span>'}</td>
@@ -494,10 +525,76 @@ function loadHistory() {
                 <td>${esc(sc.TWI || '--')}</td>
                 <td>${esc(sc.NGT || '--')}</td>
                 <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(h.Error || '')}">${esc(h.Error || '')}</td>
+                <td>${hops.length > 0 ? '<span class="hops-toggle" onclick="toggleHops(\'' + hopsId + '\')">' + esc(hopsPreview) + '</span><div class="hops-detail" id="' + hopsId + '">' + esc(hops.join('\n')) + '</div>' : '--'}</td>
             `;
             tbody.appendChild(tr);
         });
     }).catch(() => {});
+}
+
+function toggleHops(id) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = el.style.display === 'block' ? 'none' : 'block';
+}
+
+// --- Test Connection ---
+function testConnection() {
+    const btn = document.getElementById('btnTestConn');
+    btn.disabled = true;
+    btn.textContent = 'Testing...';
+    const panel = document.getElementById('diagPanel');
+    panel.style.display = 'block';
+    document.getElementById('diagSummary').textContent = 'Running diagnostics...';
+    document.getElementById('diagSummary').className = 'diag-summary';
+    document.getElementById('diagDetails').innerHTML = '';
+    document.getElementById('diagRaw').textContent = '';
+
+    fetch('diag.ashx')
+        .then(r => r.json())
+        .then(data => {
+            console.log('[SmallsDim] diag result:', data);
+
+            // Summary
+            const sumEl = document.getElementById('diagSummary');
+            const diag = data.diagnosis || 'Unknown';
+            if (diag.startsWith('SUCCESS')) {
+                sumEl.className = 'diag-summary success';
+            } else if (diag.startsWith('FALLBACK')) {
+                sumEl.className = 'diag-summary fallback';
+            } else {
+                sumEl.className = 'diag-summary fail';
+            }
+            sumEl.textContent = diag;
+
+            // Details
+            let details = '';
+            (data.steps || []).forEach(s => {
+                details += '<div style="margin-bottom:6px;"><strong>' + esc(s.step) + '</strong>: ';
+                if (s.success) {
+                    details += 'Status ' + s.statusCode + ', ' + s.bytes + ' bytes';
+                    if (s.hasKeywords) details += ' (has report data)';
+                } else {
+                    details += '<span style="color:var(--danger);">' + esc(s.error || 'Failed') + '</span>';
+                }
+                details += '</div>';
+            });
+            details += '<div style="margin-bottom:6px;"><strong>Polls:</strong> ' + (data.pollCount || 0) + ' polls, payload found: ' + (data.foundPayload ? 'YES' : 'NO') + '</div>';
+            if (data.logFileExists) {
+                details += '<div><strong>Debug log:</strong> exists (' + Math.round((data.logFileBytes || 0) / 1024) + ' KB)</div>';
+            }
+            document.getElementById('diagDetails').innerHTML = details;
+
+            // Raw JSON
+            document.getElementById('diagRaw').textContent = JSON.stringify(data, null, 2);
+        })
+        .catch(e => {
+            document.getElementById('diagSummary').className = 'diag-summary fail';
+            document.getElementById('diagSummary').textContent = 'Error: ' + e.message;
+        })
+        .finally(() => {
+            btn.disabled = false;
+            btn.textContent = 'Test Connection';
+        });
 }
 
 // --- Dates ---
@@ -533,7 +630,19 @@ function loadDayData() {
     fetch('download.ashx?date=' + encodeURIComponent(date))
         .then(r => r.json())
         .then(data => {
+            console.log('[SmallsDim] loadDayData response:', data);
             dayData = Array.isArray(data) ? data : [];
+            console.log('[SmallsDim] dayData snapshots:', dayData.length);
+            if (dayData.length > 0) {
+                const latest = dayData[dayData.length - 1];
+                console.log('[SmallsDim] latest snapshot:', {
+                    success: latest.success,
+                    detailedFound: latest.detailedFound,
+                    columns: latest.detailedColumns,
+                    rowCount: (latest.detailedRows || []).length,
+                    sortBlocks: latest.sortBlocks
+                });
+            }
             renderData();
         })
         .catch(() => { dayData = []; renderData(); });
@@ -582,6 +691,7 @@ function getSortTotal(snapshot, sortName) {
 
     let totalsRow = null;
     (snapshot.detailedRows || []).forEach(r => {
+        // Support empty first column (renamed to "Dimension" server-side)
         if (firstCol && r[firstCol] && r[firstCol].trim().toLowerCase() === 'totals') totalsRow = r;
         else {
             for (const v of Object.values(r)) {
@@ -590,11 +700,16 @@ function getSortTotal(snapshot, sortName) {
         }
     });
 
-    if (!totalsRow) return '--';
+    if (!totalsRow) {
+        console.log('[SmallsDim] getSortTotal:', sortName, '-> no totals row found. firstCol:', firstCol);
+        return '--';
+    }
 
     for (const col of cols) {
         if (col.toLowerCase().startsWith(sortName.toLowerCase())) {
-            return totalsRow[col] || '0';
+            const val = totalsRow[col] || '0';
+            console.log('[SmallsDim] getSortTotal:', sortName, '->', val);
+            return val;
         }
     }
     return '--';
