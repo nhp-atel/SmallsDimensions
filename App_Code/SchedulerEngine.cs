@@ -106,16 +106,34 @@ public static class SchedulerEngine
     {
         string path = ConfigFilePath(appDataPath);
         if (!File.Exists(path))
+        {
+            SizeReportFetcher.DebugLog("CONFIG", "CONFIG_LOAD file not found, using defaults. path=" + path);
             return SchedulerConfig.Default();
+        }
 
         try
         {
             string json = File.ReadAllText(path, Encoding.UTF8);
             var config = _json.Deserialize<SchedulerConfig>(json);
-            return config ?? SchedulerConfig.Default();
+            if (config == null)
+            {
+                SizeReportFetcher.DebugLog("CONFIG", "CONFIG_LOAD deserialized null, using defaults");
+                return SchedulerConfig.Default();
+            }
+
+            var dimSets = config.GetEffectiveDimensionSets();
+            SizeReportFetcher.DebugLog("CONFIG", string.Format(
+                "CONFIG_LOAD ok report={0} interval={1}min sorts=[{2}] dimSets={3} labels=[{4}] autoStart={5}",
+                config.Report ?? "(null)", config.IntervalMinutes,
+                config.Sorts != null ? string.Join(",", config.Sorts) : "(null)",
+                dimSets.Count,
+                string.Join(",", dimSets.Select(d => d.Label)),
+                config.AutoStart));
+            return config;
         }
-        catch
+        catch (Exception ex)
         {
+            SizeReportFetcher.DebugLog("CONFIG", "CONFIG_LOAD error=" + ex.Message);
             return SchedulerConfig.Default();
         }
     }
@@ -123,6 +141,14 @@ public static class SchedulerEngine
     public static void SaveConfig(string appDataPath, SchedulerConfig config)
     {
         StoragePathHelper.EnsureWritable(appDataPath);
+
+        var dimSets = config.GetEffectiveDimensionSets();
+        SizeReportFetcher.DebugLog("CONFIG", string.Format(
+            "CONFIG_SAVE report={0} interval={1}min dimSets={2} labels=[{3}] autoStart={4}",
+            config.Report ?? "(null)", config.IntervalMinutes,
+            dimSets.Count,
+            string.Join(",", dimSets.Select(d => d.Label)),
+            config.AutoStart));
 
         string path = ConfigFilePath(appDataPath);
         string json = _json.Serialize(config);
@@ -143,104 +169,131 @@ public static class SchedulerEngine
 
     private static void DoFetch()
     {
-        try
+        SchedulerConfig config;
+        string appDataPath;
+
+        lock (_lock)
         {
-            SchedulerConfig config;
-            string appDataPath;
+            config = CurrentConfig;
+            appDataPath = _appDataPath;
+        }
 
-            lock (_lock)
+        if (config == null || string.IsNullOrEmpty(appDataPath)) return;
+
+        string date = SizeReportFetcher.GetTodayCentral_yyyyMMdd();
+        var sorts = config.Sorts ?? new List<string> { "ALL" };
+        var dimensionSets = config.GetEffectiveDimensionSets();
+        string lastError = null;
+        int successCount = 0;
+        int failCount = 0;
+
+        SizeReportFetcher.DebugLog("SCHEDULER", string.Format(
+            "SCHEDULER_LOOP_START date={0} dimensionSets={1} labels=[{2}] sorts=[{3}] interval={4}min",
+            date, dimensionSets.Count,
+            string.Join(",", dimensionSets.Select(d => d.Label)),
+            string.Join(",", sorts),
+            config.IntervalMinutes));
+
+        foreach (var dimSet in dimensionSets)
+        {
+            try
             {
-                config = CurrentConfig;
-                appDataPath = _appDataPath;
-            }
+                SizeReportFetcher.DebugLog("SCHEDULER", string.Format("SCHEDULER_FETCH dim={0} date={1} report={2} sorts={3}",
+                    dimSet.Label, date, config.Report ?? "small", string.Join(",", sorts)));
 
-            if (config == null || string.IsNullOrEmpty(appDataPath)) return;
+                var result = SizeReportFetcher.FetchAndParse(
+                    date,
+                    config.Report ?? "small",
+                    dimSet.L ?? "16",
+                    dimSet.W ?? "16",
+                    dimSet.H ?? "7",
+                    sorts,
+                    config.MaxPolls > 0 ? config.MaxPolls : 25,
+                    config.DelayMs > 0 ? config.DelayMs : 1200
+                );
 
-            string date = SizeReportFetcher.GetTodayCentral_yyyyMMdd();
-            var sorts = config.Sorts ?? new List<string> { "ALL" };
+                SizeReportFetcher.DebugLog("SCHEDULER", string.Format("SCHEDULER_RESULT dim={0} success={1} error={2} hops={3} decodedHtmlBytes={4}",
+                    dimSet.Label, result.Success, result.Error ?? "(none)",
+                    result.Hops != null ? result.Hops.Count : 0,
+                    result.DecodedHtml != null ? result.DecodedHtml.Length : 0));
 
-            SizeReportFetcher.DebugLog("SCHEDULER", string.Format("SCHEDULER_FETCH date={0} report={1} sorts={2}",
-                date, config.Report ?? "small", string.Join(",", sorts)));
+                DailyDataStore.Append(appDataPath, date, result, dimSet.Label);
 
-            var result = SizeReportFetcher.FetchAndParse(
-                date,
-                config.Report ?? "small",
-                config.L ?? "16",
-                config.W ?? "16",
-                config.H ?? "7",
-                sorts,
-                config.MaxPolls > 0 ? config.MaxPolls : 25,
-                config.DelayMs > 0 ? config.DelayMs : 1200
-            );
+                SizeReportFetcher.DebugLog("SCHEDULER", string.Format("SCHEDULER_STORED dim={0} date={1}",
+                    dimSet.Label, date));
 
-            SizeReportFetcher.DebugLog("SCHEDULER", string.Format("SCHEDULER_RESULT success={0} error={1} hops={2} decodedHtmlBytes={3}",
-                result.Success, result.Error ?? "(none)",
-                result.Hops != null ? result.Hops.Count : 0,
-                result.DecodedHtml != null ? result.DecodedHtml.Length : 0));
-
-            // Store data
-            DailyDataStore.Append(appDataPath, date, result);
-
-            SizeReportFetcher.DebugLog("SCHEDULER", string.Format("SCHEDULER_STORED date={0} todayFetchCount={1}",
-                date, TodayFetchCount + 1));
-
-            // Update state
-            lock (_lock)
-            {
-                LastRunUtc = DateTime.UtcNow;
-                LastError = result.Success ? null : (result.Error ?? "Fetch returned no detailed data");
-
-                ResetDayCounterIfNeeded();
-                TodayFetchCount++;
-
-                int intervalMs = (config.IntervalMinutes > 0 ? config.IntervalMinutes : 30) * 60 * 1000;
-                NextRunUtc = DateTime.UtcNow.AddMilliseconds(intervalMs);
-
-                // Build sort summary
-                var sortSummary = new Dictionary<string, string>();
-                if (result.Parsed != null)
+                if (result.Success)
+                    successCount++;
+                else
                 {
-                    var totals = SizeReportFetcher.GetDetailedTotalsBySort(result.Parsed);
-                    foreach (var kv in totals)
-                        sortSummary[kv.Key] = kv.Value;
+                    failCount++;
+                    lastError = result.Error ?? "Fetch returned no detailed data";
                 }
 
-                _fetchHistory.Insert(0, new FetchHistoryEntry
+                lock (_lock)
                 {
-                    FetchedAtUtc = DateTime.UtcNow.ToString("o"),
-                    FetchedAtCentral = SizeReportFetcher.GetNowCentralFormatted(),
-                    Success = result.Success,
-                    Error = result.Error,
-                    SortCounts = sortSummary,
-                    Hops = result.Hops ?? new List<string>()
-                });
+                    ResetDayCounterIfNeeded();
+                    TodayFetchCount++;
 
-                if (_fetchHistory.Count > MaxHistoryEntries)
-                    _fetchHistory.RemoveAt(_fetchHistory.Count - 1);
+                    var sortSummary = new Dictionary<string, string>();
+                    if (result.Parsed != null)
+                    {
+                        var totals = SizeReportFetcher.GetDetailedTotalsBySort(result.Parsed);
+                        foreach (var kv in totals)
+                            sortSummary[kv.Key] = kv.Value;
+                    }
+
+                    _fetchHistory.Insert(0, new FetchHistoryEntry
+                    {
+                        FetchedAtUtc = DateTime.UtcNow.ToString("o"),
+                        FetchedAtCentral = SizeReportFetcher.GetNowCentralFormatted(),
+                        Success = result.Success,
+                        Error = result.Error,
+                        SortCounts = sortSummary,
+                        Hops = result.Hops ?? new List<string>(),
+                        DimensionLabel = dimSet.Label
+                    });
+
+                    if (_fetchHistory.Count > MaxHistoryEntries)
+                        _fetchHistory.RemoveAt(_fetchHistory.Count - 1);
+                }
+            }
+            catch (Exception ex)
+            {
+                SizeReportFetcher.DebugLog("SCHEDULER", string.Format("SCHEDULER_ERROR dim={0} error={1}\n  stackTrace={2}",
+                    dimSet.Label, ex.Message, ex.StackTrace));
+                lastError = ex.Message;
+                failCount++;
+
+                lock (_lock)
+                {
+                    _fetchHistory.Insert(0, new FetchHistoryEntry
+                    {
+                        FetchedAtUtc = DateTime.UtcNow.ToString("o"),
+                        FetchedAtCentral = SizeReportFetcher.GetNowCentralFormatted(),
+                        Success = false,
+                        Error = ex.Message,
+                        SortCounts = new Dictionary<string, string>(),
+                        Hops = new List<string>(),
+                        DimensionLabel = dimSet.Label
+                    });
+
+                    if (_fetchHistory.Count > MaxHistoryEntries)
+                        _fetchHistory.RemoveAt(_fetchHistory.Count - 1);
+                }
             }
         }
-        catch (Exception ex)
+
+        SizeReportFetcher.DebugLog("SCHEDULER", string.Format(
+            "SCHEDULER_LOOP_END date={0} total={1} success={2} fail={3} lastError={4}",
+            date, dimensionSets.Count, successCount, failCount, lastError ?? "(none)"));
+
+        lock (_lock)
         {
-            SizeReportFetcher.DebugLog("SCHEDULER", string.Format("SCHEDULER_ERROR {0}", ex.Message));
-
-            lock (_lock)
-            {
-                LastError = ex.Message;
-                LastRunUtc = DateTime.UtcNow;
-
-                _fetchHistory.Insert(0, new FetchHistoryEntry
-                {
-                    FetchedAtUtc = DateTime.UtcNow.ToString("o"),
-                    FetchedAtCentral = SizeReportFetcher.GetNowCentralFormatted(),
-                    Success = false,
-                    Error = ex.Message,
-                    SortCounts = new Dictionary<string, string>(),
-                    Hops = new List<string>()
-                });
-
-                if (_fetchHistory.Count > MaxHistoryEntries)
-                    _fetchHistory.RemoveAt(_fetchHistory.Count - 1);
-            }
+            LastRunUtc = DateTime.UtcNow;
+            LastError = lastError;
+            int intervalMs = (config.IntervalMinutes > 0 ? config.IntervalMinutes : 30) * 60 * 1000;
+            NextRunUtc = DateTime.UtcNow.AddMilliseconds(intervalMs);
         }
     }
 
@@ -266,6 +319,19 @@ public class SchedulerConfig
     public int MaxPolls { get; set; }
     public int DelayMs { get; set; }
     public bool AutoStart { get; set; }
+    public List<DimensionSet> DimensionSets { get; set; }
+
+    public List<DimensionSet> GetEffectiveDimensionSets()
+    {
+        if (DimensionSets != null && DimensionSets.Count > 0)
+            return DimensionSets;
+        return new List<DimensionSet> {
+            new DimensionSet {
+                Label = (L ?? "16") + "x" + (W ?? "16") + "x" + (H ?? "7"),
+                L = L ?? "16", W = W ?? "16", H = H ?? "7"
+            }
+        };
+    }
 
     public static SchedulerConfig Default()
     {
@@ -279,7 +345,12 @@ public class SchedulerConfig
             IntervalMinutes = 30,
             MaxPolls = 25,
             DelayMs = 1200,
-            AutoStart = false
+            AutoStart = false,
+            DimensionSets = new List<DimensionSet>
+            {
+                new DimensionSet { Label = "16x16x7", L = "16", W = "16", H = "7" },
+                new DimensionSet { Label = "16x7x16", L = "16", W = "7", H = "16" }
+            }
         };
     }
 }
@@ -292,4 +363,13 @@ public class FetchHistoryEntry
     public string Error { get; set; }
     public Dictionary<string, string> SortCounts { get; set; }
     public List<string> Hops { get; set; }
+    public string DimensionLabel { get; set; }
+}
+
+public class DimensionSet
+{
+    public string Label { get; set; }
+    public string L { get; set; }
+    public string W { get; set; }
+    public string H { get; set; }
 }

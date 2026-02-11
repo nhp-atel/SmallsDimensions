@@ -137,6 +137,24 @@ input:focus, select:focus { outline: none; border-color: var(--primary); box-sha
 .data-table tr:hover td { background: #f8fafc; }
 .table-scroll { max-height: 500px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
 
+/* Delta styling */
+.delta-pos { color: #16a34a; font-weight: 600; }
+.delta-neg { color: #dc2626; font-weight: 600; }
+.delta-zero { color: var(--text-muted); }
+.totals-row td { background: #f0f4ff !important; font-weight: 700; border-top: 2px solid var(--primary); }
+
+/* Snapshot selectors */
+.snapshot-toolbar { display: flex; align-items: center; gap: 16px; margin-bottom: 14px; flex-wrap: wrap; }
+.snapshot-toolbar label { margin-bottom: 0; font-weight: 600; color: var(--text); }
+.snapshot-toolbar select { width: auto; min-width: 200px; }
+
+/* Dimension section */
+.dim-section { margin-bottom: 24px; border: 2px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.dim-section-header {
+    padding: 10px 20px; background: linear-gradient(135deg, #eef2ff, #e0e7ff);
+    font-weight: 700; font-size: 1rem; color: #3730a3; border-bottom: 1px solid var(--border);
+}
+
 /* History table */
 .history-scroll { max-height: 300px; overflow-y: auto; }
 .history-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
@@ -144,6 +162,7 @@ input:focus, select:focus { outline: none; border-color: var(--primary); box-sha
 .history-table th { background: var(--bg); font-size: 0.75rem; text-transform: uppercase; color: var(--text-muted); position: sticky; top: 0; }
 .badge-ok { background: #dcfce7; color: #166534; padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; }
 .badge-err { background: #fee2e2; color: #991b1b; padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; }
+.badge-dim { background: #e0e7ff; color: #3730a3; padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; }
 
 /* Date picker row */
 .data-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
@@ -203,9 +222,12 @@ input:focus, select:focus { outline: none; border-color: var(--primary); box-sha
             </div>
         </div>
         <div class="form-row">
-            <div><label>Length (L)</label><input type="number" id="cfgL" value="16"></div>
-            <div><label>Width (W)</label><input type="number" id="cfgW" value="16"></div>
-            <div><label>Height (H)</label><input type="number" id="cfgH" value="7"></div>
+            <div>
+                <label>Dimension Sets</label>
+                <div id="cfgDimSets" style="padding: 8px 12px; background: var(--bg); border-radius: 6px; font-size: 0.9rem; font-weight: 500;">
+                    16x16x7, 16x7x16
+                </div>
+            </div>
         </div>
         <div style="margin-bottom: 12px;">
             <label>Sorts</label>
@@ -290,28 +312,8 @@ input:focus, select:focus { outline: none; border-color: var(--primary); box-sha
             <button class="btn btn-primary" onclick="downloadExcel()">Download Excel</button>
         </div>
 
-        <div class="tabs" id="dataTabs">
-            <div class="tab active" data-tab="summary" onclick="switchTab('summary')">Summary</div>
-            <div class="tab" data-tab="sunrise" onclick="switchTab('sunrise')">Sunrise</div>
-            <div class="tab" data-tab="daysort" onclick="switchTab('daysort')">Daysort</div>
-            <div class="tab" data-tab="twilight" onclick="switchTab('twilight')">Twilight</div>
-            <div class="tab" data-tab="night" onclick="switchTab('night')">Night</div>
-        </div>
-
-        <div class="tab-content active" id="tab-summary">
-            <div id="summaryContent" class="empty-state">No data loaded</div>
-        </div>
-        <div class="tab-content" id="tab-sunrise">
-            <div id="sunriseContent" class="empty-state">No data</div>
-        </div>
-        <div class="tab-content" id="tab-daysort">
-            <div id="daysortContent" class="empty-state">No data</div>
-        </div>
-        <div class="tab-content" id="tab-twilight">
-            <div id="twilightContent" class="empty-state">No data</div>
-        </div>
-        <div class="tab-content" id="tab-night">
-            <div id="nightContent" class="empty-state">No data</div>
+        <div id="dimSectionsContainer">
+            <div class="empty-state">No data loaded</div>
         </div>
     </div>
 </div>
@@ -327,6 +329,7 @@ input:focus, select:focus { outline: none; border-color: var(--primary); box-sha
             <table class="history-table">
                 <thead><tr>
                     <th>Time (Central)</th>
+                    <th>Dimension</th>
                     <th>Status</th>
                     <th>SUN</th>
                     <th>DAY</th>
@@ -341,11 +344,64 @@ input:focus, select:focus { outline: none; border-color: var(--primary); box-sha
     </div>
 </div>
 
+<!-- Debug Panel -->
+<div class="card">
+    <div class="card-header" onclick="toggleCard('debugBody')">
+        Debug Panel
+        <span class="toggle" id="debugToggle">Show</span>
+    </div>
+    <div class="card-body collapsed" id="debugBody">
+        <div style="margin-bottom: 12px;">
+            <button class="btn btn-outline" onclick="refreshDebugPanel()">Refresh</button>
+            <button class="btn btn-outline" onclick="dumpStateToConsole()" style="margin-left: 8px;">Dump State to Console</button>
+            <button class="btn btn-outline" onclick="fetchDebugLog()" style="margin-left: 8px;">View Server Log (last 100 lines)</button>
+        </div>
+        <div id="debugState" style="font-size: 0.82rem;">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                <div>
+                    <div style="padding: 10px; background: var(--bg); border-radius: 8px; margin-bottom: 8px;">
+                        <div style="font-weight: 600; margin-bottom: 4px;">Data State</div>
+                        <div id="dbgDataState">--</div>
+                    </div>
+                    <div style="padding: 10px; background: var(--bg); border-radius: 8px; margin-bottom: 8px;">
+                        <div style="font-weight: 600; margin-bottom: 4px;">Per-Dimension Snapshots</div>
+                        <div id="dbgDimSnapshots">--</div>
+                    </div>
+                    <div style="padding: 10px; background: var(--bg); border-radius: 8px;">
+                        <div style="font-weight: 600; margin-bottom: 4px;">Snapshot Selectors</div>
+                        <div id="dbgSnapSelectors">--</div>
+                    </div>
+                </div>
+                <div>
+                    <div style="padding: 10px; background: var(--bg); border-radius: 8px; margin-bottom: 8px;">
+                        <div style="font-weight: 600; margin-bottom: 4px;">Config</div>
+                        <div id="dbgConfig">--</div>
+                    </div>
+                    <div style="padding: 10px; background: var(--bg); border-radius: 8px;">
+                        <div style="font-weight: 600; margin-bottom: 4px;">Active Tabs</div>
+                        <div id="dbgActiveTabs">--</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div id="debugServerLog" style="display: none; margin-top: 12px;">
+            <div style="font-weight: 600; margin-bottom: 4px;">Server Debug Log (fetch_debug.log)</div>
+            <pre id="dbgServerLogContent" style="white-space: pre-wrap; word-break: break-all; max-height: 400px; overflow: auto; background: #1e293b; color: #e2e8f0; padding: 12px; border-radius: 6px; font-size: 0.78rem;"></pre>
+        </div>
+    </div>
+</div>
+
 </div><!-- /container -->
 
 <script>
 // --- State ---
-let dayData = []; // current day's consolidated snapshots
+let dayData = [];       // raw array from API
+let dimData = {};       // grouped: { "16x16x7": [...], "16x7x16": [...] }
+const DIM_LABELS = ["16x16x7", "16x7x16"];
+let dimActiveTab = {};  // { "16x16x7": "summary", ... }
+let dimSnapA = {};      // { "16x16x7": index, ... }
+let dimSnapB = {};      // { "16x16x7": index, ... }
+let currentConfig = null;
 let pollTimer = null;
 
 // --- API helpers ---
@@ -368,12 +424,22 @@ function toggleCard(id) {
 function loadConfig() {
     api('scheduler_config.ashx').then(cfg => {
         if (!cfg) return;
+        currentConfig = cfg;
+        console.log('[SmallsDim] loadConfig:', {
+            Report: cfg.Report, IntervalMinutes: cfg.IntervalMinutes,
+            DimensionSets: cfg.DimensionSets, Sorts: cfg.Sorts,
+            AutoStart: cfg.AutoStart, L: cfg.L, W: cfg.W, H: cfg.H
+        });
         document.getElementById('cfgReport').value = cfg.Report || 'small';
         document.getElementById('cfgInterval').value = (cfg.IntervalMinutes || 30).toString();
-        document.getElementById('cfgL').value = cfg.L || '16';
-        document.getElementById('cfgW').value = cfg.W || '16';
-        document.getElementById('cfgH').value = cfg.H || '7';
         document.getElementById('cfgAutoStart').checked = !!cfg.AutoStart;
+
+        // Display dimension sets
+        const dimSets = cfg.DimensionSets || [];
+        const dimDisplay = dimSets.length > 0
+            ? dimSets.map(d => d.Label).join(', ')
+            : (cfg.L || '16') + 'x' + (cfg.W || '16') + 'x' + (cfg.H || '7');
+        document.getElementById('cfgDimSets').textContent = dimDisplay;
 
         // Sorts
         const sorts = (cfg.Sorts || ['ALL']).map(s => s.toUpperCase());
@@ -396,14 +462,16 @@ function saveConfig() {
 
     const config = {
         Report: document.getElementById('cfgReport').value,
-        L: document.getElementById('cfgL').value,
-        W: document.getElementById('cfgW').value,
-        H: document.getElementById('cfgH').value,
+        L: '16', W: '16', H: '7',
         Sorts: sorts,
         IntervalMinutes: parseInt(document.getElementById('cfgInterval').value) || 30,
         MaxPolls: 25,
         DelayMs: 1200,
-        AutoStart: document.getElementById('cfgAutoStart').checked
+        AutoStart: document.getElementById('cfgAutoStart').checked,
+        DimensionSets: [
+            { Label: '16x16x7', L: '16', W: '16', H: '7' },
+            { Label: '16x7x16', L: '16', W: '7', H: '16' }
+        ]
     };
 
     apiPost('scheduler_config.ashx', config).then(r => {
@@ -440,7 +508,6 @@ function fetchNow() {
     btn.textContent = 'Fetching...';
     api('scheduler.ashx?action=runnow').then(r => {
         showControlMsg('Fetch triggered - data will appear shortly', 'var(--primary)');
-        // Poll a few times to pick up the result
         setTimeout(() => { pollStatus(); loadHistory(); loadDayData(); }, 5000);
         setTimeout(() => { pollStatus(); loadHistory(); loadDayData(); }, 15000);
         setTimeout(() => { pollStatus(); loadHistory(); loadDayData(); }, 30000);
@@ -483,7 +550,6 @@ function pollStatus() {
             errDiv.style.display = 'none';
         }
 
-        // Auto-poll when running
         if (pollTimer) clearInterval(pollTimer);
         if (running) {
             pollTimer = setInterval(() => {
@@ -504,8 +570,6 @@ function formatUtc(isoStr) {
 // --- History ---
 function loadHistory() {
     api('scheduler.ashx?action=history').then(r => {
-        console.log('[SmallsDim] history entries:', (r.history || []).length,
-            'latest:', (r.history || [])[0]);
         const tbody = document.getElementById('historyTbody');
         tbody.innerHTML = '';
         (r.history || []).forEach((h, idx) => {
@@ -517,8 +581,10 @@ function loadHistory() {
             const hopsPreview = hops.length > 0
                 ? (hasFallback ? 'FALLBACK' : hops.length + ' hops')
                 : '--';
+            const dimLabel = h.DimensionLabel || '16x16x7';
             tr.innerHTML = `
                 <td>${esc(h.FetchedAtCentral || '')}</td>
+                <td><span class="badge-dim">${esc(dimLabel)}</span></td>
                 <td>${h.Success ? '<span class="badge-ok">OK</span>' : '<span class="badge-err">FAIL</span>'}</td>
                 <td>${esc(sc.SUN || '--')}</td>
                 <td>${esc(sc.DAY || '--')}</td>
@@ -552,9 +618,6 @@ function testConnection() {
     fetch('diag.ashx')
         .then(r => r.json())
         .then(data => {
-            console.log('[SmallsDim] diag result:', data);
-
-            // Summary
             const sumEl = document.getElementById('diagSummary');
             const diag = data.diagnosis || 'Unknown';
             if (diag.startsWith('SUCCESS')) {
@@ -566,7 +629,6 @@ function testConnection() {
             }
             sumEl.textContent = diag;
 
-            // Details
             let details = '';
             (data.steps || []).forEach(s => {
                 details += '<div style="margin-bottom:6px;"><strong>' + esc(s.step) + '</strong>: ';
@@ -583,8 +645,6 @@ function testConnection() {
                 details += '<div><strong>Debug log:</strong> exists (' + Math.round((data.logFileBytes || 0) / 1024) + ' KB)</div>';
             }
             document.getElementById('diagDetails').innerHTML = details;
-
-            // Raw JSON
             document.getElementById('diagRaw').textContent = JSON.stringify(data, null, 2);
         })
         .catch(e => {
@@ -608,8 +668,7 @@ function refreshDates() {
             opt.value = d; opt.textContent = d;
             sel.appendChild(opt);
         });
-        // Add today if not present
-        const today = new Date().toLocaleDateString('en-CA'); // yyyy-MM-dd
+        const today = new Date().toLocaleDateString('en-CA');
         if (sel.options.length === 0) {
             const opt = document.createElement('option');
             opt.value = today; opt.textContent = today + ' (today)';
@@ -625,65 +684,249 @@ function refreshDates() {
 // --- Day data ---
 function loadDayData() {
     const date = document.getElementById('dateSelect').value;
-    if (!date) { dayData = []; renderData(); return; }
+    if (!date) { dayData = []; dimData = {}; renderAllDimSections(); return; }
 
     fetch('download.ashx?date=' + encodeURIComponent(date))
         .then(r => r.json())
         .then(data => {
-            console.log('[SmallsDim] loadDayData response:', data);
             dayData = Array.isArray(data) ? data : [];
-            console.log('[SmallsDim] dayData snapshots:', dayData.length);
-            if (dayData.length > 0) {
-                const latest = dayData[dayData.length - 1];
-                console.log('[SmallsDim] latest snapshot:', {
-                    success: latest.success,
-                    detailedFound: latest.detailedFound,
-                    columns: latest.detailedColumns,
-                    rowCount: (latest.detailedRows || []).length,
-                    sortBlocks: latest.sortBlocks
-                });
+            console.log('[SmallsDim] loadDayData: received', dayData.length, 'snapshots');
+
+            // Group by dimension label
+            dimData = {};
+            DIM_LABELS.forEach(l => dimData[l] = []);
+            dayData.forEach(snap => {
+                const label = snap.dimensionLabel || '16x16x7';
+                if (!dimData[label]) dimData[label] = [];
+                dimData[label].push(snap);
+            });
+
+            // Log grouping results
+            DIM_LABELS.forEach(l => {
+                console.log('[SmallsDim] loadDayData: dim=' + l + ' snapshots=' + (dimData[l] || []).length);
+            });
+            // Check for orphan labels
+            const labelSet = new Set(DIM_LABELS);
+            const orphans = dayData.filter(s => !labelSet.has(s.dimensionLabel || '16x16x7'));
+            if (orphans.length > 0) {
+                console.warn('[SmallsDim] loadDayData: ' + orphans.length + ' snapshots with unknown dimensionLabel!',
+                    orphans.map(s => s.dimensionLabel));
             }
-            renderData();
+
+            // Initialize snapshot selectors
+            DIM_LABELS.forEach(label => {
+                const snaps = dimData[label] || [];
+                if (snaps.length >= 2) {
+                    dimSnapA[label] = snaps.length - 2;
+                    dimSnapB[label] = snaps.length - 1;
+                } else if (snaps.length === 1) {
+                    dimSnapA[label] = 0;
+                    dimSnapB[label] = 0;
+                } else {
+                    dimSnapA[label] = -1;
+                    dimSnapB[label] = -1;
+                }
+                if (!dimActiveTab[label]) dimActiveTab[label] = 'summary';
+            });
+
+            renderAllDimSections();
         })
-        .catch(() => { dayData = []; renderData(); });
+        .catch(() => { dayData = []; dimData = {}; renderAllDimSections(); });
 }
 
-// --- Render data ---
-function renderData() {
-    renderSummary();
-    renderSortTab('sunrise', 'Sunrise');
-    renderSortTab('daysort', 'Daysort');
-    renderSortTab('twilight', 'Twilight');
-    renderSortTab('night', 'Night');
+// --- Render all dimension sections ---
+function renderAllDimSections() {
+    const container = document.getElementById('dimSectionsContainer');
+    console.log('[SmallsDim] renderAllDimSections: dayData=' + dayData.length,
+        DIM_LABELS.map(l => l + '=' + (dimData[l] || []).length).join(' '));
+
+    if (dayData.length === 0) {
+        container.innerHTML = '<div class="empty-state">No data for this date</div>';
+        return;
+    }
+
+    let html = '';
+    DIM_LABELS.forEach(label => {
+        const snaps = dimData[label] || [];
+        const safeLabel = label.replace(/[^a-zA-Z0-9]/g, '_');
+
+        html += '<div class="dim-section">';
+        html += '<div class="dim-section-header">' + esc(label) + ' (' + snaps.length + ' snapshots)</div>';
+        html += '<div style="padding: 16px;">';
+
+        if (snaps.length === 0) {
+            html += '<div class="empty-state">No data for this dimension</div>';
+        } else {
+            // Snapshot selectors
+            html += '<div class="snapshot-toolbar">';
+            html += '<label>Snapshot A:</label>';
+            html += '<select id="snapA_' + safeLabel + '" onchange="onSnapChange(\'' + label + '\')">';
+            snaps.forEach((s, i) => {
+                const t = s.fetchedAtCentral || formatUtc(s.fetchedAtUtc);
+                const sel = i === (dimSnapA[label] || 0) ? ' selected' : '';
+                html += '<option value="' + i + '"' + sel + '>' + esc(t) + '</option>';
+            });
+            html += '</select>';
+
+            html += '<label>Snapshot B:</label>';
+            html += '<select id="snapB_' + safeLabel + '" onchange="onSnapChange(\'' + label + '\')">';
+            snaps.forEach((s, i) => {
+                const t = s.fetchedAtCentral || formatUtc(s.fetchedAtUtc);
+                const sel = i === (dimSnapB[label] || 0) ? ' selected' : '';
+                html += '<option value="' + i + '"' + sel + '>' + esc(t) + '</option>';
+            });
+            html += '</select>';
+            html += '</div>';
+
+            // Tabs
+            const activeTab = dimActiveTab[label] || 'summary';
+            html += '<div class="tabs">';
+            ['summary', 'sunrise', 'daysort', 'twilight', 'night'].forEach(tab => {
+                const tabLabel = tab.charAt(0).toUpperCase() + tab.slice(1);
+                const cls = tab === activeTab ? 'tab active' : 'tab';
+                html += '<div class="' + cls + '" data-tab="' + tab + '" onclick="switchDimTab(\'' + label + '\',\'' + tab + '\')">' + tabLabel + '</div>';
+            });
+            html += '</div>';
+
+            // Tab content containers
+            ['summary', 'sunrise', 'daysort', 'twilight', 'night'].forEach(tab => {
+                const cls = tab === activeTab ? 'tab-content active' : 'tab-content';
+                html += '<div class="' + cls + '" id="tab-' + tab + '-' + safeLabel + '"></div>';
+            });
+        }
+
+        html += '</div></div>';
+    });
+
+    container.innerHTML = html;
+
+    // Now render content into each tab
+    DIM_LABELS.forEach(label => {
+        const snaps = dimData[label] || [];
+        if (snaps.length > 0) {
+            renderDimSummary(label);
+            renderDimSortTab(label, 'sunrise', 'Sunrise');
+            renderDimSortTab(label, 'daysort', 'Daysort');
+            renderDimSortTab(label, 'twilight', 'Twilight');
+            renderDimSortTab(label, 'night', 'Night');
+        }
+    });
 }
 
-function renderSummary() {
-    const el = document.getElementById('summaryContent');
-    if (dayData.length === 0) { el.innerHTML = '<div class="empty-state">No data for this date</div>'; return; }
+// --- Snapshot selector change ---
+function onSnapChange(dimLabel) {
+    const safeLabel = dimLabel.replace(/[^a-zA-Z0-9]/g, '_');
+    const selA = document.getElementById('snapA_' + safeLabel);
+    const selB = document.getElementById('snapB_' + safeLabel);
+    if (selA) dimSnapA[dimLabel] = parseInt(selA.value);
+    if (selB) dimSnapB[dimLabel] = parseInt(selB.value);
+    console.log('[SmallsDim] onSnapChange: dim=' + dimLabel + ' A=' + dimSnapA[dimLabel] + ' B=' + dimSnapB[dimLabel]);
 
-    // Build summary: one row per sort, columns = time intervals
+    renderDimSummary(dimLabel);
+    renderDimSortTab(dimLabel, 'sunrise', 'Sunrise');
+    renderDimSortTab(dimLabel, 'daysort', 'Daysort');
+    renderDimSortTab(dimLabel, 'twilight', 'Twilight');
+    renderDimSortTab(dimLabel, 'night', 'Night');
+}
+
+// --- Tab switching (scoped to dimension) ---
+function switchDimTab(dimLabel, tabId) {
+    const safeLabel = dimLabel.replace(/[^a-zA-Z0-9]/g, '_');
+    dimActiveTab[dimLabel] = tabId;
+
+    // Update tab classes within this dimension's section
+    const section = document.getElementById('tab-' + tabId + '-' + safeLabel);
+    if (!section) return;
+    const parent = section.parentElement;
+
+    parent.querySelectorAll('.tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.tab === tabId);
+    });
+    parent.querySelectorAll('.tab-content').forEach(tc => {
+        const tcTab = tc.id.replace('tab-', '').replace('-' + safeLabel, '');
+        tc.classList.toggle('active', tcTab === tabId);
+    });
+}
+
+// --- Delta formatting ---
+function formatDelta(delta) {
+    if (delta === null || delta === undefined || isNaN(delta)) return '<span class="delta-zero">--</span>';
+    if (delta > 0) return '<span class="delta-pos">+' + delta.toLocaleString() + '</span>';
+    if (delta < 0) return '<span class="delta-neg">' + delta.toLocaleString() + '</span>';
+    return '<span class="delta-zero">0</span>';
+}
+
+function parseNum(val) {
+    if (!val || val === '--') return 0;
+    return parseInt(String(val).replace(/,/g, ''), 10) || 0;
+}
+
+// --- Render Summary (delta between snapshots) ---
+function renderDimSummary(dimLabel) {
+    const safeLabel = dimLabel.replace(/[^a-zA-Z0-9]/g, '_');
+    const el = document.getElementById('tab-summary-' + safeLabel);
+    if (!el) return;
+
+    const snaps = dimData[dimLabel] || [];
+    if (snaps.length === 0) { el.innerHTML = '<div class="empty-state">No data</div>'; return; }
+
+    const idxA = dimSnapA[dimLabel] != null ? dimSnapA[dimLabel] : 0;
+    const idxB = dimSnapB[dimLabel] != null ? dimSnapB[dimLabel] : snaps.length - 1;
+    const snapA = snaps[idxA];
+    const snapB = snaps[idxB];
+
     const sortNames = ['Sunrise', 'Daysort', 'Twilight', 'Night'];
-    const times = dayData.map(s => s.fetchedAtCentral || formatUtc(s.fetchedAtUtc));
+    const timeA = snapA ? (snapA.fetchedAtCentral || formatUtc(snapA.fetchedAtUtc)) : '--';
+    const timeB = snapB ? (snapB.fetchedAtCentral || formatUtc(snapB.fetchedAtUtc)) : '--';
 
-    let html = '<div class="table-scroll"><table class="data-table"><thead><tr><th>Sort</th>';
-    times.forEach(t => html += '<th>' + esc(t) + '</th>');
+    // Delta table: Sort | Snap A Total | Snap B Total | Delta
+    let html = '<h4 style="margin-bottom:10px;">Delta: ' + esc(timeA) + ' vs ' + esc(timeB) + '</h4>';
+    html += '<div class="table-scroll"><table class="data-table"><thead><tr>';
+    html += '<th>Sort</th><th>Snap A (' + esc(timeA) + ')</th><th>Snap B (' + esc(timeB) + ')</th><th>Delta</th>';
     html += '</tr></thead><tbody>';
 
     sortNames.forEach(sortName => {
-        html += '<tr><td><strong>' + esc(sortName) + '</strong></td>';
-        dayData.forEach(snapshot => {
-            const val = getSortTotal(snapshot, sortName);
-            html += '<td>' + esc(val) + '</td>';
-        });
+        const valA = snapA ? getSortTotal(snapA, sortName) : '--';
+        const valB = snapB ? getSortTotal(snapB, sortName) : '--';
+        const numA = parseNum(valA);
+        const numB = parseNum(valB);
+        const delta = (valA !== '--' && valB !== '--') ? numB - numA : null;
+
+        html += '<tr>';
+        html += '<td><strong>' + esc(sortName) + '</strong></td>';
+        html += '<td>' + esc(valA) + '</td>';
+        html += '<td>' + esc(valB) + '</td>';
+        html += '<td>' + formatDelta(delta) + '</td>';
         html += '</tr>';
     });
 
     html += '</tbody></table></div>';
+
+    // Time-series overview
+    if (snaps.length > 1) {
+        html += '<h4 style="margin:20px 0 10px;">All Snapshots Overview</h4>';
+        const times = snaps.map(s => s.fetchedAtCentral || formatUtc(s.fetchedAtUtc));
+        html += '<div class="table-scroll"><table class="data-table"><thead><tr><th>Sort</th>';
+        times.forEach(t => html += '<th>' + esc(t) + '</th>');
+        html += '</tr></thead><tbody>';
+
+        sortNames.forEach(sortName => {
+            html += '<tr><td><strong>' + esc(sortName) + '</strong></td>';
+            snaps.forEach(snapshot => {
+                const val = getSortTotal(snapshot, sortName);
+                html += '<td>' + esc(val) + '</td>';
+            });
+            html += '</tr>';
+        });
+
+        html += '</tbody></table></div>';
+    }
+
     el.innerHTML = html;
 }
 
+// --- Get sort total from a snapshot ---
 function getSortTotal(snapshot, sortName) {
-    // Look in detailedRows for the Totals row, then find the column starting with sortName
     if (!snapshot.detailedRows || !snapshot.detailedColumns) return '--';
 
     const cols = snapshot.detailedColumns || [];
@@ -691,7 +934,6 @@ function getSortTotal(snapshot, sortName) {
 
     let totalsRow = null;
     (snapshot.detailedRows || []).forEach(r => {
-        // Support empty first column (renamed to "Dimension" server-side)
         if (firstCol && r[firstCol] && r[firstCol].trim().toLowerCase() === 'totals') totalsRow = r;
         else {
             for (const v of Object.values(r)) {
@@ -700,61 +942,93 @@ function getSortTotal(snapshot, sortName) {
         }
     });
 
-    if (!totalsRow) {
-        console.log('[SmallsDim] getSortTotal:', sortName, '-> no totals row found. firstCol:', firstCol);
-        return '--';
-    }
+    if (!totalsRow) return '--';
 
     for (const col of cols) {
         if (col.toLowerCase().startsWith(sortName.toLowerCase())) {
-            const val = totalsRow[col] || '0';
-            console.log('[SmallsDim] getSortTotal:', sortName, '->', val);
-            return val;
+            return totalsRow[col] || '0';
         }
     }
     return '--';
 }
 
-function renderSortTab(tabId, sortName) {
-    const el = document.getElementById(tabId + 'Content');
-    if (dayData.length === 0) { el.innerHTML = '<div class="empty-state">No data</div>'; return; }
+// --- Render Sort Tab (delta between snapshots) ---
+function renderDimSortTab(dimLabel, tabId, sortName) {
+    const safeLabel = dimLabel.replace(/[^a-zA-Z0-9]/g, '_');
+    const el = document.getElementById('tab-' + tabId + '-' + safeLabel);
+    if (!el) return;
 
-    // Use latest snapshot's detailed table, filtered to show the column for this sort
-    const latest = dayData[dayData.length - 1];
-    if (!latest || !latest.detailedFound || !latest.detailedColumns || !latest.detailedRows) {
+    const snaps = dimData[dimLabel] || [];
+    if (snaps.length === 0) { el.innerHTML = '<div class="empty-state">No data</div>'; return; }
+
+    const idxA = dimSnapA[dimLabel] != null ? dimSnapA[dimLabel] : 0;
+    const idxB = dimSnapB[dimLabel] != null ? dimSnapB[dimLabel] : snaps.length - 1;
+    const snapA = snaps[idxA];
+    const snapB = snaps[idxB];
+
+    if (!snapB || !snapB.detailedFound || !snapB.detailedColumns || !snapB.detailedRows) {
         el.innerHTML = '<div class="empty-state">No detailed data available</div>';
         return;
     }
 
-    const cols = latest.detailedColumns;
+    const cols = snapB.detailedColumns;
     const firstCol = cols[0] || '';
-    // Find the column for this sort
     const sortCol = cols.find(c => c.toLowerCase().startsWith(sortName.toLowerCase()));
     if (!sortCol) {
-        el.innerHTML = '<div class="empty-state">No ' + sortName + ' data in latest fetch</div>';
+        el.innerHTML = '<div class="empty-state">No ' + sortName + ' data in selected snapshot</div>';
         return;
     }
 
-    // Show dimension breakdown table
-    let html = '<h4 style="margin-bottom:10px;">Latest fetch: ' + esc(latest.fetchedAtCentral || '') + '</h4>';
+    const timeA = snapA ? (snapA.fetchedAtCentral || formatUtc(snapA.fetchedAtUtc)) : '--';
+    const timeB = snapB.fetchedAtCentral || formatUtc(snapB.fetchedAtUtc);
+
+    // Build lookup from snapA
+    const snapALookup = {};
+    if (snapA && snapA.detailedRows && snapA.detailedColumns) {
+        const aFirstCol = snapA.detailedColumns[0] || '';
+        const aSortCol = snapA.detailedColumns.find(c => c.toLowerCase().startsWith(sortName.toLowerCase()));
+        if (aSortCol) {
+            snapA.detailedRows.forEach(r => {
+                const key = r[aFirstCol] || '';
+                snapALookup[key] = r[aSortCol] || '0';
+            });
+        }
+    }
+
+    // Delta table
+    let html = '<h4 style="margin-bottom:10px;">Delta: ' + esc(timeA) + ' vs ' + esc(timeB) + '</h4>';
     html += '<div class="table-scroll"><table class="data-table"><thead><tr>';
     html += '<th>' + esc(firstCol || 'Dimension') + '</th>';
-    html += '<th>' + esc(sortCol) + '</th>';
+    html += '<th>Snap A (' + esc(timeA) + ')</th>';
+    html += '<th>Snap B (' + esc(timeB) + ')</th>';
+    html += '<th>Delta</th>';
     html += '</tr></thead><tbody>';
 
-    latest.detailedRows.forEach(row => {
-        html += '<tr>';
-        html += '<td>' + esc(row[firstCol] || '') + '</td>';
-        html += '<td>' + esc(row[sortCol] || '') + '</td>';
+    snapB.detailedRows.forEach(row => {
+        const key = row[firstCol] || '';
+        const valB = row[sortCol] || '0';
+        const valA = snapALookup[key] || '0';
+        const numA = parseNum(valA);
+        const numB = parseNum(valB);
+        const delta = numB - numA;
+        const isTotals = key.trim().toLowerCase() === 'totals';
+        const rowClass = isTotals ? ' class="totals-row"' : '';
+
+        html += '<tr' + rowClass + '>';
+        html += '<td>' + esc(key) + '</td>';
+        html += '<td>' + esc(valA) + '</td>';
+        html += '<td>' + esc(valB) + '</td>';
+        html += '<td>' + formatDelta(delta) + '</td>';
         html += '</tr>';
     });
+
     html += '</tbody></table></div>';
 
     // Time-series of totals for this sort
-    if (dayData.length > 1) {
+    if (snaps.length > 1) {
         html += '<h4 style="margin:16px 0 10px;">Totals over time</h4>';
         html += '<div class="table-scroll"><table class="data-table"><thead><tr><th>Time</th><th>' + esc(sortName) + ' Total</th></tr></thead><tbody>';
-        dayData.forEach(snap => {
+        snaps.forEach(snap => {
             const val = getSortTotal(snap, sortName);
             html += '<tr><td>' + esc(snap.fetchedAtCentral || '') + '</td><td>' + esc(val) + '</td></tr>';
         });
@@ -762,12 +1036,6 @@ function renderSortTab(tabId, sortName) {
     }
 
     el.innerHTML = html;
-}
-
-// --- Tab switching ---
-function switchTab(tabId) {
-    document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tabId));
-    document.querySelectorAll('.tab-content').forEach(tc => tc.classList.toggle('active', tc.id === 'tab-' + tabId));
 }
 
 // --- Excel download ---
@@ -778,56 +1046,84 @@ function downloadExcel() {
     const wb = XLSX.utils.book_new();
     const date = document.getElementById('dateSelect').value || 'data';
     const sortNames = ['Sunrise', 'Daysort', 'Twilight', 'Night'];
-    const times = dayData.map(s => s.fetchedAtCentral || formatUtc(s.fetchedAtUtc));
 
-    // Summary sheet — only sorts with data
-    const summaryRows = [['Sort', ...times]];
-    const sortsWithData = [];
+    DIM_LABELS.forEach(dimLabel => {
+        const snaps = dimData[dimLabel] || [];
+        if (snaps.length === 0) return;
 
-    sortNames.forEach(sn => {
-        const row = [sn];
-        let hasData = false;
-        dayData.forEach(snap => {
-            const val = getSortTotal(snap, sn);
-            row.push(val);
-            if (val !== '--' && val !== '0' && val !== 'no data') hasData = true;
+        const times = snaps.map(s => s.fetchedAtCentral || formatUtc(s.fetchedAtUtc));
+        const suffix = ' ' + dimLabel;
+
+        // Summary sheet
+        const summaryRows = [['Sort', ...times]];
+        const sortsWithData = [];
+
+        sortNames.forEach(sn => {
+            const row = [sn];
+            let hasData = false;
+            snaps.forEach(snap => {
+                const val = getSortTotal(snap, sn);
+                row.push(val);
+                if (val !== '--' && val !== '0' && val !== 'no data') hasData = true;
+            });
+            if (hasData) {
+                summaryRows.push(row);
+                sortsWithData.push(sn);
+            }
         });
-        if (hasData) {
-            summaryRows.push(row);
-            sortsWithData.push(sn);
+
+        if (summaryRows.length > 1) {
+            const sheetName = ('Summary' + suffix).substring(0, 31);
+            const ws = XLSX.utils.aoa_to_sheet(summaryRows);
+            XLSX.utils.book_append_sheet(wb, ws, sheetName);
         }
-    });
 
-    if (summaryRows.length > 1) {
-        const ws = XLSX.utils.aoa_to_sheet(summaryRows);
-        XLSX.utils.book_append_sheet(wb, ws, 'Summary');
-    }
+        // Per-sort sheets
+        sortsWithData.forEach(sortName => {
+            const latest = snaps[snaps.length - 1];
+            if (!latest || !latest.detailedColumns || !latest.detailedRows) return;
 
-    // Per-sort sheets — only for sorts with data
-    sortsWithData.forEach(sortName => {
-        const latest = dayData[dayData.length - 1];
-        if (!latest || !latest.detailedColumns || !latest.detailedRows) return;
+            const cols = latest.detailedColumns;
+            const firstCol = cols[0] || '';
+            const sortCol = cols.find(c => c.toLowerCase().startsWith(sortName.toLowerCase()));
+            if (!sortCol) return;
 
-        const cols = latest.detailedColumns;
-        const firstCol = cols[0] || '';
-        const sortCol = cols.find(c => c.toLowerCase().startsWith(sortName.toLowerCase()));
-        if (!sortCol) return;
+            // Delta: use second-to-last vs latest if available
+            const prev = snaps.length >= 2 ? snaps[snaps.length - 2] : null;
+            const prevLookup = {};
+            if (prev && prev.detailedRows && prev.detailedColumns) {
+                const pFirstCol = prev.detailedColumns[0] || '';
+                const pSortCol = prev.detailedColumns.find(c => c.toLowerCase().startsWith(sortName.toLowerCase()));
+                if (pSortCol) {
+                    prev.detailedRows.forEach(r => {
+                        prevLookup[r[pFirstCol] || ''] = r[pSortCol] || '0';
+                    });
+                }
+            }
 
-        const rows = [[firstCol || 'Dimension', sortCol]];
-        latest.detailedRows.forEach(r => {
-            rows.push([r[firstCol] || '', r[sortCol] || '']);
+            const rows = [[firstCol || 'Dimension', 'Snap A', 'Snap B (Latest)', 'Delta']];
+            latest.detailedRows.forEach(r => {
+                const key = r[firstCol] || '';
+                const valB = r[sortCol] || '0';
+                const valA = prevLookup[key] || valB;
+                const numA = parseNum(valA);
+                const numB = parseNum(valB);
+                const delta = numB - numA;
+                rows.push([key, valA, valB, delta]);
+            });
+
+            // Add time-series
+            rows.push([]);
+            rows.push(['Time', sortName + ' Total']);
+            snaps.forEach(snap => {
+                const val = getSortTotal(snap, sortName);
+                rows.push([snap.fetchedAtCentral || '', val]);
+            });
+
+            const sheetName = (sortName + suffix).substring(0, 31);
+            const ws = XLSX.utils.aoa_to_sheet(rows);
+            XLSX.utils.book_append_sheet(wb, ws, sheetName);
         });
-
-        // Add time-series
-        rows.push([]);
-        rows.push(['Time', sortName + ' Total']);
-        dayData.forEach(snap => {
-            const val = getSortTotal(snap, sortName);
-            rows.push([snap.fetchedAtCentral || '', val]);
-        });
-
-        const ws = XLSX.utils.aoa_to_sheet(rows);
-        XLSX.utils.book_append_sheet(wb, ws, sortName);
     });
 
     XLSX.writeFile(wb, 'SmallsDimensions_' + date + '.xlsx');
@@ -839,6 +1135,125 @@ function esc(s) {
     const div = document.createElement('div');
     div.textContent = s;
     return div.innerHTML;
+}
+
+// --- Debug ---
+function refreshDebugPanel() {
+    // Data state
+    const dbgData = document.getElementById('dbgDataState');
+    dbgData.innerHTML = 'dayData: <strong>' + dayData.length + '</strong> total snapshots<br>'
+        + 'Date selected: <strong>' + (document.getElementById('dateSelect').value || 'none') + '</strong><br>'
+        + 'DIM_LABELS: <strong>' + DIM_LABELS.join(', ') + '</strong>';
+
+    // Per-dimension snapshots
+    const dbgDim = document.getElementById('dbgDimSnapshots');
+    let dimHtml = '';
+    DIM_LABELS.forEach(label => {
+        const snaps = dimData[label] || [];
+        dimHtml += '<div><strong>' + esc(label) + '</strong>: ' + snaps.length + ' snapshots';
+        if (snaps.length > 0) {
+            const first = snaps[0];
+            const last = snaps[snaps.length - 1];
+            dimHtml += '<br>&nbsp;&nbsp;First: ' + esc(first.fetchedAtCentral || '?');
+            dimHtml += '<br>&nbsp;&nbsp;Last: ' + esc(last.fetchedAtCentral || '?');
+            dimHtml += '<br>&nbsp;&nbsp;Columns: ' + ((last.detailedColumns || []).length);
+            dimHtml += ', Rows: ' + ((last.detailedRows || []).length);
+            dimHtml += ', detailedFound: ' + (last.detailedFound ? 'YES' : 'NO');
+        }
+        dimHtml += '</div><br>';
+    });
+    // Check for unknown labels
+    const knownLabels = new Set(DIM_LABELS);
+    dayData.forEach(snap => {
+        const lbl = snap.dimensionLabel || '16x16x7';
+        if (!knownLabels.has(lbl)) {
+            dimHtml += '<div style="color:var(--danger);"><strong>UNKNOWN:</strong> ' + esc(lbl) + '</div>';
+        }
+    });
+    dbgDim.innerHTML = dimHtml || '--';
+
+    // Snapshot selectors
+    const dbgSnap = document.getElementById('dbgSnapSelectors');
+    let snapHtml = '';
+    DIM_LABELS.forEach(label => {
+        const snaps = dimData[label] || [];
+        const idxA = dimSnapA[label];
+        const idxB = dimSnapB[label];
+        snapHtml += '<strong>' + esc(label) + '</strong>: A=' + idxA + ' B=' + idxB;
+        if (snaps[idxA]) snapHtml += ' (A: ' + esc(snaps[idxA].fetchedAtCentral || '?') + ')';
+        if (snaps[idxB]) snapHtml += ' (B: ' + esc(snaps[idxB].fetchedAtCentral || '?') + ')';
+        snapHtml += '<br>';
+    });
+    dbgSnap.innerHTML = snapHtml || '--';
+
+    // Config
+    const dbgCfg = document.getElementById('dbgConfig');
+    if (currentConfig) {
+        const dimSets = currentConfig.DimensionSets || [];
+        dbgCfg.innerHTML = 'Report: <strong>' + esc(currentConfig.Report || '?') + '</strong><br>'
+            + 'Interval: <strong>' + (currentConfig.IntervalMinutes || '?') + ' min</strong><br>'
+            + 'Sorts: <strong>' + esc((currentConfig.Sorts || []).join(', ')) + '</strong><br>'
+            + 'DimensionSets: <strong>' + dimSets.length + '</strong> ['
+            + dimSets.map(d => d.Label + ' (L=' + d.L + ' W=' + d.W + ' H=' + d.H + ')').join(', ') + ']<br>'
+            + 'AutoStart: <strong>' + !!currentConfig.AutoStart + '</strong><br>'
+            + 'Legacy L/W/H: ' + (currentConfig.L || '?') + '/' + (currentConfig.W || '?') + '/' + (currentConfig.H || '?');
+    } else {
+        dbgCfg.textContent = 'Not loaded';
+    }
+
+    // Active tabs
+    const dbgTabs = document.getElementById('dbgActiveTabs');
+    let tabHtml = '';
+    DIM_LABELS.forEach(label => {
+        tabHtml += '<strong>' + esc(label) + '</strong>: ' + (dimActiveTab[label] || 'summary') + '<br>';
+    });
+    dbgTabs.innerHTML = tabHtml || '--';
+}
+
+function dumpStateToConsole() {
+    console.group('[SmallsDim] Full State Dump');
+    console.log('dayData:', dayData);
+    console.log('dimData:', dimData);
+    console.log('dimSnapA:', dimSnapA);
+    console.log('dimSnapB:', dimSnapB);
+    console.log('dimActiveTab:', dimActiveTab);
+    console.log('currentConfig:', currentConfig);
+    console.log('DIM_LABELS:', DIM_LABELS);
+    DIM_LABELS.forEach(label => {
+        const snaps = dimData[label] || [];
+        console.group('Dimension: ' + label + ' (' + snaps.length + ' snapshots)');
+        snaps.forEach((snap, i) => {
+            console.log('  [' + i + '] ' + (snap.fetchedAtCentral || '?') +
+                ' success=' + snap.success +
+                ' cols=' + ((snap.detailedColumns || []).length) +
+                ' rows=' + ((snap.detailedRows || []).length) +
+                ' dimLabel=' + (snap.dimensionLabel || '(missing)'));
+        });
+        console.groupEnd();
+    });
+    console.groupEnd();
+    alert('State dumped to browser console (F12)');
+}
+
+function fetchDebugLog() {
+    const logPanel = document.getElementById('debugServerLog');
+    const logContent = document.getElementById('dbgServerLogContent');
+    logPanel.style.display = 'block';
+    logContent.textContent = 'Loading...';
+
+    fetch('download.ashx?action=debuglog')
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) {
+                logContent.textContent = 'Error: ' + data.error;
+            } else {
+                logContent.textContent = data.content || '(empty)';
+                logContent.scrollTop = logContent.scrollHeight;
+            }
+        })
+        .catch(e => {
+            logContent.textContent = 'Fetch error: ' + e.message;
+        });
 }
 
 // --- Init ---

@@ -17,10 +17,10 @@ public static class DailyDataStore
     /// <summary>
     /// Append one interval snapshot to App_Data/{date}/consolidated.json
     /// </summary>
-    public static void Append(string appDataPath, string date, FetchResult result)
+    public static void Append(string appDataPath, string date, FetchResult result, string dimensionLabel = null)
     {
-        SizeReportFetcher.DebugLog("STORE", string.Format("STORE_APPEND date={0} resultNull={1} parsedNull={2}",
-            date, result == null, result != null ? (result.Parsed == null).ToString() : "n/a"));
+        SizeReportFetcher.DebugLog("STORE", string.Format("STORE_APPEND date={0} dim={1} resultNull={2} parsedNull={3}",
+            date, dimensionLabel ?? "(default)", result == null, result != null ? (result.Parsed == null).ToString() : "n/a"));
 
         if (result == null || result.Parsed == null)
         {
@@ -31,7 +31,7 @@ public static class DailyDataStore
         string dateFolder = Path.Combine(appDataPath, date);
         string filePath = Path.Combine(dateFolder, "consolidated.json");
 
-        var snapshot = BuildSnapshot(result);
+        var snapshot = BuildSnapshot(result, dimensionLabel);
 
         lock (_fileLock)
         {
@@ -91,9 +91,10 @@ public static class DailyDataStore
         return dates;
     }
 
-    private static Dictionary<string, object> BuildSnapshot(FetchResult result)
+    private static Dictionary<string, object> BuildSnapshot(FetchResult result, string dimensionLabel)
     {
         var snapshot = new Dictionary<string, object>();
+        snapshot["dimensionLabel"] = dimensionLabel ?? "16x16x7";
         snapshot["fetchedAtUtc"] = result.FetchedAtUtc.ToString("o");
         snapshot["fetchedAtCentral"] = SizeReportFetcher.GetNowCentralFormatted();
         snapshot["success"] = result.Success;

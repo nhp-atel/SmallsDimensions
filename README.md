@@ -1,40 +1,39 @@
 # SmallsDimensions - Automated Package Dimension Reporting
 
-Automated scheduler and dashboard for fetching ATM package dimension data from the size report system. Replaces dozens of manual URL calls per day with a single automated process that produces consolidated Excel reports.
+Automated scheduler and dashboard for fetching ATM package dimension data from the size report system. Fetches data for **multiple dimension configurations** every N minutes, stores snapshots, and provides a dashboard with **delta tracking** between any two snapshots and consolidated Excel reports.
 
 ## Quick Start
 
 1. Deploy all files to your IIS site directory
 2. Open `index.html` in your browser
-3. Configure dimensions, sorts, and interval in the Configuration panel
+3. Configure sorts and interval in the Configuration panel
 4. Click **Save Configuration**, then **Start Scheduler**
 
 ## How to Use
 
 ### Step 1: Deploy
 
-Copy all the new files into the same folder where your existing `.ashx` files live on the server (e.g. the `middleware_alocal` folder). The new files to copy are:
+Copy all files into the same folder where your existing `.ashx` files live on the server (e.g. the `middleware_alocal` folder). Key files:
 
-- `App_Code/SizeReportFetcher.cs`
-- `App_Code/SchedulerEngine.cs`
-- `App_Code/DailyDataStore.cs`
-- `scheduler.ashx`
-- `scheduler_config.ashx`
-- `download.ashx`
-- `index.html`
-- `Global.asax`
+- `App_Code/SizeReportFetcher.cs` — Shared fetch+parse logic
+- `App_Code/SchedulerEngine.cs` — Timer-based scheduler with multi-dimension support
+- `App_Code/DailyDataStore.cs` — JSON file storage per date
+- `App_Code/StoragePathHelper.cs` — Path resolution and permission checking
+- `scheduler.ashx` — API: start/stop/status/runnow/history
+- `scheduler_config.ashx` — API: GET/POST configuration
+- `download.ashx` — API: list dates, get day data, view debug log
+- `diag.ashx` — Connection diagnostic tool
+- `index.html` — Dashboard UI
+- `Global.asax` — Auto-start on app pool start
 
-Also copy the updated versions of:
-- `sizeReportJsonHandler.ashx`
-- `size_report_json.ashx`
-- `size_report_view.ashx`
-- `size_report.ashx`
+Also copy the updated legacy handlers:
+- `sizeReportJsonHandler.ashx`, `size_report_json.ashx`, `size_report_view.ashx`, `size_report.ashx`
 
-That's it — no build step needed. IIS auto-compiles everything. The `App_Data/` folder and all data files are created automatically by the code.
+No build step needed — IIS auto-compiles everything. `App_Data/` and all data files are created automatically.
 
 ### Step 2: One-Time IIS Setting (required for scheduler)
 
-The **only** thing you need to do manually on the server is change the app pool idle timeout. Without this, IIS shuts down the app after 20 minutes of no web requests, which kills the scheduler.
+The scheduler needs the app pool to stay alive. Without this, IIS shuts down the app after 20 minutes of no web requests.
 
 Open **IIS Manager** on the server:
 
@@ -44,101 +43,45 @@ Open **IIS Manager** on the server:
 2. **Sites** → your site → right-click → **Advanced Settings**
    - **Preload Enabled**: change to `True`
 
-This is a one-time change. Everything else is handled by the code automatically:
-- `App_Data/` folder — created automatically
-- `scheduler_config.json` — created automatically on first config save
-- `consolidated.json` per date — created automatically on each fetch
-- `Global.asax` — picked up by IIS automatically (handles auto-start after app pool recycles)
+This is a one-time change. Everything else is handled automatically.
 
 ### Step 3: Open the Dashboard
 
 Go to: `http://10.66.225.81/middleware_alocal/index.html`
 
-You'll see the dashboard with a red "Stopped" badge in the header.
-
 ### Step 4: Configure Fetch Settings
 
-1. In the **Configuration** panel at the top, set your preferences:
+1. In the **Configuration** panel:
    - **Report Type**: Choose `Small` or `Large`
-   - **Dimensions**: Set L, W, H thresholds (defaults: 16, 16, 7)
-   - **Sorts**: Check which sorts to fetch — `ALL` fetches all sorts in one request, or pick individual ones (`Sunrise`, `Daysort`, `Twilight`, `Night`)
-   - **Fetch Interval**: How often to auto-fetch (15, 30, 45, or 60 minutes)
-   - **Auto-start**: Check this if you want the scheduler to start automatically whenever the IIS app pool restarts
+   - **Dimension Sets**: Displayed read-only — defaults to `16x16x7` and `16x7x16`
+   - **Sorts**: Check which sorts to fetch — `ALL` fetches all sorts in one request
+   - **Fetch Interval**: 15, 30, 45, or 60 minutes
+   - **Auto-start**: Check to auto-start scheduler on app pool restart
 2. Click **Save Configuration**
 
 ### Step 5: Run Your First Fetch
 
-Click the **Fetch Now** button to trigger a manual fetch immediately. This takes 15-30 seconds (the ATM system requires polling). Once complete:
-- The **Status** panel updates with the fetch time
-- The **Data View** panel shows your data in the Summary tab
-- The **Fetch History** section at the bottom shows the result
+Click **Fetch Now** to trigger a manual fetch. The scheduler fetches data for **each dimension set** sequentially — you'll see two history entries per fetch cycle (one for 16x16x7, one for 16x7x16).
 
 ### Step 6: Start the Scheduler
 
-Click **Start Scheduler** to begin automated fetching. The header badge turns green and shows "Running". The scheduler will automatically fetch data at your configured interval. The dashboard auto-refreshes status every 15 seconds.
+Click **Start Scheduler** for automated fetching at your configured interval.
 
-### Step 7: View Data
+### Step 7: View Data with Delta Tracking
 
-- Use the **Date** dropdown to switch between dates
-- Click the **Summary** tab to see package totals per sort across all time intervals
-- Click individual sort tabs (**Sunrise**, **Daysort**, **Twilight**, **Night**) to see the full dimension breakdown table and totals over time
-- The data accumulates throughout the day — each fetch adds a new time column
+The Data View panel shows **two stacked dimension sections** (one per dimension set):
+
+- Each section has its own **Snapshot A / Snapshot B** selectors
+- Pick any two timestamps to compare
+- **Summary tab**: Shows sort totals delta (Snap A vs Snap B) plus a full time-series overview
+- **Sort tabs** (Sunrise, Daysort, Twilight, Night): Shows per-dimension row deltas with the Totals row highlighted
+- Positive deltas are shown in green, negative in red
 
 ### Step 8: Download Excel
 
-Click **Download Excel** to generate an `.xlsx` file with:
-- A **Summary** sheet with sort totals across all time intervals
-- Individual sheets per sort (e.g. **Sunrise**, **Daysort**) with the full dimension breakdown
-- Only sorts that have actual data get a sheet (empty sorts are skipped)
-
-The file is generated client-side using SheetJS — nothing is sent to a server.
-
-### Stopping the Scheduler
-
-Click **Stop Scheduler** at any time. Already-collected data is preserved in `App_Data/`. You can restart anytime and it will continue accumulating data for the current day.
-
-### Viewing Historical Data
-
-All data is stored by date in `App_Data/{yyyy-MM-dd}/consolidated.json`. Use the date dropdown in the Data View panel to browse previous days. You can download Excel files for any historical date.
-
-### Using the API Directly
-
-You can also interact with the system via direct API calls (useful for scripting or monitoring):
-
-```
-# Check scheduler status
-GET http://10.66.225.81/middleware_alocal/scheduler.ashx?action=status
-
-# Start/stop the scheduler
-GET http://10.66.225.81/middleware_alocal/scheduler.ashx?action=start
-GET http://10.66.225.81/middleware_alocal/scheduler.ashx?action=stop
-
-# Trigger a manual fetch
-GET http://10.66.225.81/middleware_alocal/scheduler.ashx?action=runnow
-
-# View fetch history
-GET http://10.66.225.81/middleware_alocal/scheduler.ashx?action=history
-
-# Get/save configuration
-GET http://10.66.225.81/middleware_alocal/scheduler_config.ashx
-POST http://10.66.225.81/middleware_alocal/scheduler_config.ashx  (JSON body)
-
-# List available dates
-GET http://10.66.225.81/middleware_alocal/download.ashx?action=dates
-
-# Get a specific day's data
-GET http://10.66.225.81/middleware_alocal/download.ashx?date=2026-02-05
-```
-
-### Backwards Compatibility
-
-Your existing URLs still work exactly as before:
-- `http://10.66.225.81/middleware_alocal/size_report.ashx`
-- `http://10.66.225.81/middleware_alocal/sizeReportJsonHandler.ashx`
-- `http://10.66.225.81/middleware_alocal/size_report_json.ashx`
-- etc.
-
-The new scheduler system is additive — it doesn't break any existing workflows.
+Click **Download Excel** to generate an `.xlsx` file with sheets per dimension set:
+- `Summary 16x16x7`, `Summary 16x7x16` — Sort totals across all time intervals
+- `Sunrise 16x16x7`, `Sunrise 16x7x16`, etc. — Per-dimension row deltas + time-series
 
 ## Architecture
 
@@ -147,24 +90,78 @@ IIS-hosted ASP.NET project — no build system or `.csproj` needed. IIS auto-com
 ```
 SmallsDimensions/
   App_Code/
-    SizeReportFetcher.cs       # Shared fetch+parse logic (static class)
-    SchedulerEngine.cs         # Timer-based scheduler singleton
-    DailyDataStore.cs          # JSON file storage per date
-  App_Data/                    # Auto-created data storage
-    scheduler_config.json      # Persisted configuration
-    2026-02-05/
-      consolidated.json        # All fetched intervals for the day
-  scheduler.ashx               # API: start/stop/status/runnow/history
-  scheduler_config.ashx        # API: GET/POST configuration
-  download.ashx                # API: list dates + get day data
-  index.html                   # Dashboard UI
-  Global.asax                  # Auto-start scheduler on app pool start
-  sizeReportJsonHandler.ashx   # Original handler (backwards compatible)
-  size_report_json.ashx        # Legacy JSON handler
-  size_report_view.ashx        # Legacy view handler
-  size_report_run.ashx         # Legacy run handler
-  size_report.ashx             # Legacy base handler
+    SizeReportFetcher.cs        # Static class: HTTP fetch + HTML parse
+    SchedulerEngine.cs          # Singleton scheduler: timer, multi-dim fetch loop, config
+    DailyDataStore.cs           # JSON file storage: append snapshots per date
+    StoragePathHelper.cs        # Path resolution + permission validation
+  App_Data/                     # Auto-created data storage
+    fetch_debug.log             # Rolling debug log (500KB max, auto-rotates)
+    scheduler_config.json       # Persisted configuration (with DimensionSets)
+    {yyyy-MM-dd}/
+      consolidated.json         # All fetched interval snapshots for the day
+  scheduler.ashx                # API: start/stop/status/runnow/history
+  scheduler_config.ashx         # API: GET/POST configuration
+  download.ashx                 # API: dates list, day data, debug log viewer
+  diag.ashx                     # Connection diagnostic (step-by-step HTTP test)
+  index.html                    # Dashboard UI (SheetJS for Excel export)
+  Global.asax                   # Auto-start scheduler on app pool start
+  sizeReportJsonHandler.ashx    # Original handler (backwards compatible)
+  size_report_json.ashx         # Legacy JSON handler
+  size_report_view.ashx         # Legacy view handler
+  size_report_run.ashx          # Legacy run handler
+  size_report.ashx              # Legacy base handler
+  atm.ashx                     # ATM proxy handler
+  atmdata.ashx                 # ATM data handler
+  discover.ashx                # Discovery handler
+  download_size_report_csv.ashx # CSV download handler
 ```
+
+### Key Classes
+
+| Class | File | Purpose |
+|-------|------|---------|
+| `SizeReportFetcher` | SizeReportFetcher.cs | Static class. Connects to ATM system, submits form, polls for unescape payload, parses HTML tables. Also provides `DebugLog()` for all components. |
+| `SizeReportParser` / `SizeReportParsed` | SizeReportFetcher.cs | Parses HTML report into structured data: sort blocks + detailed dimension rows. |
+| `FetchResult` | SizeReportFetcher.cs | Result of a fetch: success/error, parsed data, hop log, decoded HTML. |
+| `SchedulerEngine` | SchedulerEngine.cs | Static singleton. Timer fires every N minutes, loops over `DimensionSet`s, fetches each independently, stores results. |
+| `SchedulerConfig` | SchedulerEngine.cs | Configuration POCO: report type, sorts, interval, `DimensionSets` list, auto-start. |
+| `DimensionSet` | SchedulerEngine.cs | One dimension configuration: `Label` ("16x16x7"), `L`, `W`, `H`. |
+| `FetchHistoryEntry` | SchedulerEngine.cs | One history row: timestamp, success/error, sort counts, hops, `DimensionLabel`. |
+| `DailyDataStore` | DailyDataStore.cs | Thread-safe JSON file storage. Appends snapshots (with `dimensionLabel`) to `consolidated.json`. |
+| `StoragePathHelper` | StoragePathHelper.cs | Resolves `App_Data` path, validates write permissions, provides descriptive error messages. |
+
+### Data Flow
+
+```
+Timer tick (every N min)
+  └─> SchedulerEngine.DoFetch()
+        ├─> For each DimensionSet (e.g. 16x16x7, 16x7x16):
+        │     ├─> SizeReportFetcher.FetchAndParse(date, report, L, W, H, sorts)
+        │     │     ├─> GET warmup → POST submit → poll hidden endpoint
+        │     │     └─> Parse HTML → FetchResult { Parsed, Hops, Success }
+        │     ├─> DailyDataStore.Append(result, dimensionLabel)
+        │     │     └─> Writes to App_Data/{date}/consolidated.json
+        │     └─> Insert FetchHistoryEntry (with DimensionLabel)
+        └─> Update LastRunUtc, NextRunUtc, LastError
+
+Dashboard (index.html)
+  └─> loadDayData() → fetch download.ashx?date=...
+        └─> Groups snapshots by dimensionLabel into dimData{}
+              └─> Renders per-dimension sections with snapshot selectors + delta tables
+```
+
+### Dual Dimension System
+
+The scheduler fetches data for **two dimension configurations** per cycle:
+
+| Label | L | W | H | Description |
+|-------|---|---|---|-------------|
+| `16x16x7` | 16 | 16 | 7 | Primary dimension set |
+| `16x7x16` | 16 | 7 | 16 | Secondary dimension set (W and H swapped) |
+
+Configuration is stored in `scheduler_config.json` as a `DimensionSets` array. Backward compatibility: if the config file has no `DimensionSets` (old format), the legacy scalar `L`/`W`/`H` fields are used to build a single dimension set.
+
+Each snapshot in `consolidated.json` includes a `dimensionLabel` field. Old snapshots without this field default to `"16x16x7"` in the UI.
 
 ## API Endpoints
 
@@ -172,17 +169,17 @@ SmallsDimensions/
 
 | Parameter | Action |
 |---|---|
-| `?action=status` | Returns scheduler status (running, last/next fetch, error) |
+| `?action=status` | Returns scheduler status (running, last/next fetch, error, today's fetch count) |
 | `?action=start` | Starts the scheduler with saved config |
 | `?action=stop` | Stops the scheduler |
-| `?action=runnow` | Triggers an immediate fetch |
-| `?action=history` | Returns recent fetch history with sort counts |
+| `?action=runnow` | Triggers an immediate fetch (all dimension sets) |
+| `?action=history` | Returns recent fetch history with sort counts and dimension labels |
 
 ### Configuration — `scheduler_config.ashx`
 
 | Method | Action |
 |---|---|
-| `GET` | Returns current config JSON |
+| `GET` | Returns current config JSON (includes `DimensionSets` array) |
 | `POST` (JSON body) | Saves new config |
 
 ### Data Access — `download.ashx`
@@ -190,17 +187,29 @@ SmallsDimensions/
 | Parameter | Action |
 |---|---|
 | `?action=dates` | Lists available dates |
+| `?action=debuglog` | Returns last 100 lines of `fetch_debug.log` |
 | `?date=2026-02-05` | Returns all fetched intervals for that date |
 | *(no params)* | Returns today's data |
 
+### Diagnostics — `diag.ashx`
+
+| Method | Action |
+|---|---|
+| `GET` | Runs step-by-step connection test: warmup, submit, poll. Returns JSON with diagnosis. |
+
 ## Dashboard Features
 
-- **Configuration Panel** — Report type, dimensions (L/W/H), sorts, fetch interval, auto-start toggle
-- **Controls** — Start/Stop scheduler, manual Fetch Now button
+- **Configuration Panel** — Report type, dimension sets (read-only display), sorts, fetch interval, auto-start toggle
+- **Controls** — Start/Stop scheduler, manual Fetch Now, Test Connection diagnostic
 - **Live Status** — Running/stopped indicator, last/next fetch times, today's fetch count, errors
-- **Data View** — Date picker, Summary + per-sort tabs showing dimension breakdowns and time-series totals
-- **Excel Export** — Download `.xlsx` with Summary sheet + per-sort sheets (only sorts with data)
-- **Fetch History** — Table of recent fetches with status, sort counts, and errors
+- **Data View** — Date picker, per-dimension stacked sections, each with:
+  - Snapshot A / Snapshot B selectors (pick any two timestamps)
+  - Summary tab with sort totals delta + full time-series
+  - Sort tabs with per-dimension-row delta tables (Totals row highlighted)
+  - Delta colors: green for positive, red for negative
+- **Excel Export** — Download `.xlsx` with per-dimension sheets: `Summary 16x16x7`, `Sunrise 16x16x7`, etc.
+- **Fetch History** — Table with dimension label, status, sort counts, error, and hop details
+- **Debug Panel** — Collapsible panel showing raw data state, snapshot selectors, config, and server log viewer
 - **Auto-refresh** — Polls status every 15 seconds while scheduler is running
 
 ## Configuration Options
@@ -208,66 +217,100 @@ SmallsDimensions/
 | Field | Default | Description |
 |---|---|---|
 | Report | `small` | Report type (`small` or `large`) |
-| L, W, H | `16, 16, 7` | Package dimension thresholds |
+| DimensionSets | `[16x16x7, 16x7x16]` | Array of dimension configurations (Label, L, W, H) |
 | Sorts | `ALL` | Sort codes: `SUN`, `DAY`, `TWI`, `NGT`, `ALL` |
 | Interval | `30` min | Fetch frequency (15/30/45/60 minutes) |
 | Auto-start | `false` | Start scheduler automatically on app pool restart |
+| MaxPolls | `25` | Maximum polling attempts per fetch |
+| DelayMs | `1200` | Delay between polls (ms) |
 
-## How It Works
+Legacy fields `L`, `W`, `H` are still supported for backward compatibility — if `DimensionSets` is absent, they're used to build a single dimension set.
 
-1. **SchedulerEngine** fires a timer every N minutes
-2. **SizeReportFetcher** connects to the ATM system (`10.66.225.108`), submits the form, polls the hidden endpoint until the unescape payload appears, then parses the HTML report
-3. **DailyDataStore** appends each fetch result as a JSON snapshot to `App_Data/{date}/consolidated.json`
-4. The **dashboard** reads this consolidated data and renders it in tables, with client-side Excel generation via SheetJS
+## Debugging & Troubleshooting
+
+### Server-Side Debug Log
+
+All backend components write to `App_Data/fetch_debug.log` via `SizeReportFetcher.DebugLog()`. The log auto-rotates at 500KB (keeps last half).
+
+**Log components and what they track:**
+
+| Component | What it logs |
+|-----------|-------------|
+| `SCHEDULER` | `SCHEDULER_LOOP_START` (dimension count, labels), `SCHEDULER_FETCH` (per-dim fetch start), `SCHEDULER_RESULT` (success/error per dim), `SCHEDULER_STORED`, `SCHEDULER_LOOP_END` (totals summary), `SCHEDULER_ERROR` (with stack trace) |
+| `CONFIG` | `CONFIG_LOAD` (loaded config details, dimension sets), `CONFIG_SAVE` (saved config details) |
+| `STORE` | `STORE_APPEND` (date, dimension label), `STORE_WRITTEN` (path, snapshot count, columns, rows), `STORE_SKIP` (null result) |
+| `FETCHER` | Warmup, submit, poll attempts, unescape detection, fallback usage |
+| `TABLE_PARSE` | HTML search, header detection, row parsing, totals extraction |
+
+**How to view the log:**
+
+1. **Dashboard**: Open Debug Panel → click "View Server Log (last 100 lines)"
+2. **Direct API**: `GET download.ashx?action=debuglog`
+3. **File system**: Open `App_Data/fetch_debug.log` directly on the server
+
+### Dashboard Debug Panel
+
+The collapsible **Debug Panel** at the bottom of the dashboard shows:
+
+- **Data State**: Total snapshots loaded, selected date, known dimension labels
+- **Per-Dimension Snapshots**: Snapshot count, first/last timestamps, column/row counts per dimension
+- **Snapshot Selectors**: Current A/B indices and timestamps for each dimension
+- **Config**: Full loaded configuration including DimensionSets details
+- **Active Tabs**: Which tab is active per dimension section
+- **Dump State to Console**: Writes full `dayData`, `dimData`, selectors, and config to browser console (F12)
+- **View Server Log**: Fetches and displays the last 100 lines of `fetch_debug.log`
+
+### Browser Console Logging
+
+The dashboard logs key events to the browser console (prefix: `[SmallsDim]`):
+
+- `loadConfig`: Full config received from server
+- `loadDayData`: Snapshot count, per-dimension grouping, orphan label warnings
+- `renderAllDimSections`: Snapshot counts per dimension
+- `onSnapChange`: Which dimension/snapshot changed
+
+### Connection Diagnostics
+
+Click **Test Connection** in the Controls panel to run `diag.ashx`, which tests:
+1. Warmup GET to the ATM form
+2. Submit POST with parameters
+3. Poll hidden endpoint for unescape payload
+
+Returns a step-by-step diagnosis: SUCCESS, FALLBACK AVAILABLE, or NO DATA FOUND.
+
+### Common Issues
+
+| Problem | Diagnosis | Fix |
+|---------|-----------|-----|
+| "Access to path denied" | Missing App_Data write permission | `icacls "App_Data" /grant "IIS AppPool\YourPool":(OI)(CI)M` |
+| Scheduler stops after 20 min | IIS idle timeout | Set app pool idle timeout to 0, start mode to AlwaysRunning |
+| No data for one dimension | Check debug log for that dim's SCHEDULER_FETCH/RESULT | ATM system may not have data for that L/W/H combination |
+| Snapshots all in "16x16x7" | Old data without `dimensionLabel` field | Expected for pre-upgrade data; new fetches will have the label |
+| Delta shows all zeros | Same snapshot selected for A and B | Pick different snapshots |
+| Test Connection shows FALLBACK | Primary URL failed, hidden URL succeeded | Normal — the fetcher handles this automatically |
 
 ## Deployment & IIS Configuration
 
 ### One-Time IIS Settings
 
-Set these via **IIS Manager** on the server (not web.config):
-
 | Setting | Location | Value | Why |
 |---|---|---|---|
-| Idle Time-out | App Pool → Advanced Settings | `0` | Prevents IIS from killing the scheduler after 20 min of no requests |
-| Start Mode | App Pool → Advanced Settings | `AlwaysRunning` | Starts the app pool immediately when IIS starts |
-| Preload Enabled | Site → Advanced Settings | `True` | Sends a warm-up request on start, triggering `Application_Start` |
-| Application Initialization | Server Manager → Add Roles/Features → IIS → App Development | Enabled | Required Windows feature for preload to work |
+| Idle Time-out | App Pool → Advanced Settings | `0` | Prevents IIS from killing the scheduler |
+| Start Mode | App Pool → Advanced Settings | `AlwaysRunning` | Starts app pool immediately when IIS starts |
+| Preload Enabled | Site → Advanced Settings | `True` | Triggers `Application_Start` on start |
+| Application Initialization | Server Manager → Add Roles/Features → IIS → App Development | Enabled | Required Windows feature for preload |
 
 ### App_Data Permissions
 
-The IIS worker process identity needs **Modify** permission on the `App_Data` folder. Without this you'll get:
-
-```
-Access to the path 'C:\inetpub\wwwroot\Middleware_alocal\App_Data' is denied.
-```
-
-**To fix**, open an admin Command Prompt and run:
+The IIS worker process identity needs **Modify** permission on `App_Data`:
 
 ```cmd
 icacls "C:\inetpub\wwwroot\Middleware_alocal\App_Data" /grant "IIS AppPool\Middleware_alocal":(OI)(CI)M
 ```
 
-Replace `Middleware_alocal` with your actual app pool name. If the pool runs as a domain account (e.g. `DOMAIN\svcSmalls`), use that instead.
-
-You can also set this via Explorer: right-click `App_Data` → Properties → Security → Edit → Add → type the identity → check Modify → OK.
-
-### How to Find Your App Pool Identity
-
-The error message now includes the exact identity and path. If you hit the error via a browser request, the JSON response shows:
-
-```
-PERMISSION ERROR - Storage path is not writable.
-  Path     : C:\inetpub\wwwroot\Middleware_alocal\App_Data
-  Identity : IIS AppPool\Middleware_alocal
-  Fix      : Grant Modify permission to 'IIS AppPool\Middleware_alocal' on folder '...'
-             icacls "..." /grant "IIS AppPool\Middleware_alocal":(OI)(CI)M
-```
-
-If the error happens during auto-start (no browser request), check **Windows Event Viewer** → Windows Logs → Application for the same message.
-
 ### Optional: Override Storage Path
 
-If you can't change permissions on the site folder, set an alternative writable path in `Web.config`:
+Set an alternative writable path in `Web.config`:
 
 ```xml
 <appSettings>
@@ -275,16 +318,11 @@ If you can't change permissions on the site folder, set an alternative writable 
 </appSettings>
 ```
 
-All code paths (Global.asax, scheduler, config, download) will use this path instead. The target folder still needs Modify permission for the app pool identity.
+### Backwards Compatibility
 
-### web.config Auto-Start Support
-
-The `web.config` includes an `applicationInitialization` section that works with the IIS settings above:
-
-```xml
-<applicationInitialization doAppInitAfterRestart="true">
-  <add initializationPage="/" />
-</applicationInitialization>
-```
-
-This tells IIS to send a warm-up request to `/` whenever the app pool starts or recycles, which triggers `Application_Start` in `Global.asax`, which auto-starts the scheduler (if `AutoStart` is enabled in the config)
+| Scenario | Handling |
+|----------|----------|
+| Old `scheduler_config.json` (no `DimensionSets`) | `GetEffectiveDimensionSets()` falls back to scalar L/W/H as single set |
+| Old `consolidated.json` snapshots (no `dimensionLabel`) | JS defaults to `"16x16x7"` |
+| Old history entries (no `DimensionLabel`) | UI renders `h.DimensionLabel \|\| '16x16x7'` |
+| Existing `.ashx` URLs | Still work unchanged — new system is additive |

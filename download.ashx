@@ -30,6 +30,28 @@ public class DownloadHandler : IHttpHandler
                 return;
             }
 
+            if (action == "debuglog")
+            {
+                string logPath = Path.Combine(appDataPath, "fetch_debug.log");
+                if (!File.Exists(logPath))
+                {
+                    context.Response.Write(json.Serialize(new { content = "(log file does not exist)", lines = 0 }));
+                    return;
+                }
+                // Read last 100 lines
+                var allLines = File.ReadAllLines(logPath, Encoding.UTF8);
+                int start = Math.Max(0, allLines.Length - 100);
+                var tail = new string[allLines.Length - start];
+                Array.Copy(allLines, start, tail, 0, tail.Length);
+                context.Response.Write(json.Serialize(new {
+                    content = string.Join("\n", tail),
+                    lines = tail.Length,
+                    totalLines = allLines.Length,
+                    fileSizeKB = Math.Round((double)new FileInfo(logPath).Length / 1024, 1)
+                }));
+                return;
+            }
+
             if (!string.IsNullOrEmpty(date))
             {
                 // Return consolidated JSON for that date
