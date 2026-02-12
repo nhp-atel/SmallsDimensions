@@ -1,0 +1,3235 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CACH Post Sort — Final + Comparisons + Advanced Graphs</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Work+Sans:wght@300;400;500;600;700&display=swap');
+
+
+    body {
+      font-family: 'Work Sans', system-ui, sans-serif;
+    }
+
+    .mono {
+      font-family: 'Space Mono', monospace;
+    }
+
+    .glass-effect {
+      background: rgba(15, 23, 42, 0.6);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+    }
+
+    .graph-container {
+      position: relative;
+      min-height: 400px;
+    }
+
+    .metric-pill {
+      transition: all 0.2s ease;
+    }
+
+    .metric-pill:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(6, 182, 212, 0.3);
+    }
+
+    .metric-pill.active {
+      background: linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%);
+      border-color: #06b6d4;
+    }
+
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translateY(20px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .animate-slide-in {
+      animation: slideIn 0.4s ease-out forwards;
+    }
+  </style>
+</head>
+
+<body class="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 min-h-screen">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef, useCallback } = React;
+
+    // ====== ENDPOINTS ======
+    const DATA_URL = 'http://10.66.225.81/middleware/HourlyQuicklookServer_Data.aspx';
+    const RUN_LOOKUP = 'http://10.66.225.81/middleware/SortRunLookup.aspx';
+    const TYPE_LOOKUP = 'http://10.66.225.81/middleware/SortLookup.aspx';
+    const CHUTE_FULL_URL = 'http://10.66.225.81/middleware/OutChuteFull.aspx';
+    const UPTIME_URL = 'http://10.66.225.81/middleware/OutBoundRuntime.aspx';
+    const BV_DEFECTS_URL = 'http://10.66.225.81/middleware/BuildingVolumeandDefects.aspx';
+    const PRIMARY_LIVE_URL = 'http://10.66.225.81/middleware/PrimaryLiveValues.aspx';
+    const COLLECTOR_DT_URL = 'http://10.66.225.81/middleware/OutRuntime.aspx';
+    const TOTAL_DEFECTS_URL = 'http://10.66.225.81/middleware/OutDefects.aspx';
+    const TOTES_UTILIZATION_URL = "http://10.66.225.81/middleware/ToteCount.aspx";
+    const SORTSTATE_URL = "http://10.66.225.81/middleware/SortState.aspx";
+    const SMALL_SORT_URL = "http://10.66.225.81/middleware/SmallSort.aspx";
+    const MOST_TO_GAIN_URL = 'http://10.66.225.81/middleware/MostToGainOutbound.aspx';
+    const NOTES_URL = "http://10.66.225.81/middleware/SortNotes.aspx";
+
+    // ====== CONSTS ======
+    const HOURS_DESC = [6.0, 5.5, 5.0, 4.5, 4.0, 3.5, 3.0, 2.5, 2.0, 1.5, 1.0, 0.5];
+    const KEY_FIELDS = ['sortid', 'sortDate', 'sortName', 'hourNumber', 'TS'];
+    function toLocalYMD(d) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+
+    const todayStr = () => toLocalYMD(new Date());
+
+    // Parse YYYY-MM-DD manually (avoid Date(string) UTC parsing)
+    function parseYMD(ymd) {
+      const [y, m, d] = ymd.split('-').map(Number);
+      return new Date(y, (m - 1), d); // local midnight
+    }
+
+    function prevDate(dateStr, daysBack) {
+      const x = parseYMD(dateStr);
+      x.setDate(x.getDate() - daysBack);
+      return toLocalYMD(x);
+    }
+
+    // Chart colors for multiple metrics
+    const CHART_COLORS = [
+      { border: 'rgb(6, 182, 212)', bg: 'rgba(6, 182, 212, 0.1)' },
+      { border: 'rgb(59, 130, 246)', bg: 'rgba(59, 130, 246, 0.1)' },
+      { border: 'rgb(168, 85, 247)', bg: 'rgba(168, 85, 247, 0.1)' },
+      { border: 'rgb(236, 72, 153)', bg: 'rgba(236, 72, 153, 0.1)' },
+      { border: 'rgb(251, 146, 60)', bg: 'rgba(251, 146, 60, 0.1)' },
+      { border: 'rgb(34, 197, 94)', bg: 'rgba(34, 197, 94, 0.1)' },
+      { border: 'rgb(250, 204, 21)', bg: 'rgba(250, 204, 21, 0.1)' },
+      { border: 'rgb(248, 113, 113)', bg: 'rgba(248, 113, 113, 0.1)' },
+    ];
+
+    // ====== HELPERS ======
+    async function safeJsonParse(text) {
+      try { return JSON.parse(text); } catch { }
+      const m = text.match(/\{[\s\S]*\}$/s) || text.match(/\[[\s\S]*\]$/s);
+      return m ? JSON.parse(m[0]) : {};
+    }
+
+    async function fetchJson(url) {
+      const res = await fetch(url, { headers: { Accept: 'application/json' } });
+      const text = await res.text();
+      if (!res.ok) {
+        const short = text.slice(0, 300).replace(/\s+/g, ' ');
+        throw new Error(`HTTP ${res.status} ${res.statusText}${short ? ' - ' + short : ''}`);
+      }
+      return safeJsonParse(text);
+    }
+
+    const DATA_CACHE = new Map();
+
+    async function fetchJsonCached(
+      url,
+      { ttlMs = 60_000, persist = false } = {}
+    ) {
+      const now = Date.now();
+
+      // memory cache
+      const hit = DATA_CACHE.get(url);
+      if (hit && now - hit.ts < ttlMs) return hit.value;
+
+      // localStorage snapshot (optional)
+      if (persist) {
+        try {
+          const raw = localStorage.getItem(`snap:${url}`);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (now - parsed.ts < ttlMs) {
+              DATA_CACHE.set(url, parsed);
+              return parsed.value;
+            }
+          }
+        } catch (e) {
+          console.warn('Failed to read from localStorage cache:', e.message || e);
+        }
+      }
+
+      // fetch fresh
+      const res = await fetch(url, {
+        headers: { Accept: 'application/json' }
+      });
+      const text = await res.text();
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+
+      const value = await safeJsonParse(text);
+      const entry = { ts: now, value };
+
+      DATA_CACHE.set(url, entry);
+      if (persist) {
+        try {
+          localStorage.setItem(`snap:${url}`, JSON.stringify(entry));
+        } catch (e) {
+          console.warn('Failed to write to localStorage cache:', e.message || e);
+        }
+      }
+
+      return value;
+    }
+
+    // Dashboard state persistence helpers
+    function saveDashboardState(sortid, data) {
+      const key = `dashboard_${sortid}`;
+      try {
+        localStorage.setItem(key, JSON.stringify({
+          timestamp: Date.now(),
+          data: data
+        }));
+      } catch (e) {
+        console.warn('Failed to cache dashboard state:', e);
+      }
+    }
+
+    function loadDashboardState(sortid) {
+      const key = `dashboard_${sortid}`;
+      try {
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          const cached = JSON.parse(raw);
+          return cached;
+        }
+      } catch (e) {
+        console.warn('Failed to load cached dashboard state:', e);
+      }
+      return null;
+    }
+
+
+    function pivotIfNeeded(rows) {
+      if (!Array.isArray(rows) || rows.length === 0) return null;
+      const hasMetricValue = ('metric' in rows[0]) && ('value' in rows[0]);
+      if (!hasMetricValue) {
+        if (rows.length === 1) return rows[0];
+        const withTS = rows.filter(r => r.TS);
+        return (withTS.length
+          ? withTS.sort((a, b) => String(a.TS).localeCompare(String(b.TS)))[withTS.length - 1]
+          : rows[rows.length - 1]);
+      }
+      const keyFor = r => KEY_FIELDS.map(k => r[k]).join('||');
+      const groups = new Map();
+      for (const r of rows) {
+        const k = keyFor(r);
+        if (!groups.has(k)) {
+          const base = {};
+          KEY_FIELDS.forEach(kf => base[kf] = r[kf]);
+          groups.set(k, base);
+        }
+        const g = groups.get(k);
+        const m = String(r.metric ?? '').trim();
+        const v = r.value;
+        g[m] = (typeof v === 'number')
+          ? v
+          : (v == null ? null : (isFinite(+v) ? +v : v));
+      }
+      const arr = Array.from(groups.values());
+      const withTS = arr.filter(r => r.TS);
+      return (withTS.length
+        ? withTS.sort((a, b) => String(a.TS).localeCompare(String(b.TS)))[withTS.length - 1]
+        : arr[arr.length - 1]);
+    }
+
+    async function fetchFinalRow(sortid) {
+      let chosen = null, used = null, lastErr = null;
+      for (const h of HOURS_DESC) {
+        try {
+          const qs = new URLSearchParams({ sortid: String(sortid), hourid: String(h) });
+          const json = await fetchJson(`${DATA_URL}?${qs}`);
+          const rows = Array.isArray(json) ? json : (json ? [json] : []);
+          if (rows.length) {
+            const wide = pivotIfNeeded(rows);
+            if (wide) { chosen = wide; used = h; break; }
+          }
+        } catch (e) { lastErr = e; }
+      }
+      if (!chosen) {
+        if (lastErr) throw lastErr;
+        throw new Error('No data found for any hour (0.5–6.0).');
+      }
+      return { row: chosen, hour: used };
+    }
+
+    async function fetchSortState(sortid) {
+      if (!sortid || isNaN(Number(sortid))) {
+        console.error("Invalid sortid:", sortid);
+        return null;
+      }
+
+      const url = `${SORTSTATE_URL}?sortid=${encodeURIComponent(sortid)}`;
+
+      try {
+        const res = await fetch(url, {
+          headers: { "Accept": "application/json" }
+        });
+
+        const text = await res.text();
+
+        if (!res.ok) {
+          console.error("HTTP Error:", res.status, text);
+          return null;
+        }
+
+        let data = null;
+
+        try {
+          data = JSON.parse(text);
+        } catch {
+          console.warn("Non-strict JSON returned, attempting fallback parse...");
+          const match = text.match(/\{[\s\S]*\}/);
+          if (match) data = JSON.parse(match[0]);
+        }
+
+        if (!data || typeof data !== "object") {
+          console.warn("Unexpected JSON shape:", data);
+          return null;
+        }
+
+        return {
+          sortid: Number(data.sortid),
+          sortStart: data.StartTS || null,
+          sortEnd: data.EndTS || null
+        };
+
+      } catch (err) {
+        console.error("Fetch SortState failed:", err);
+        return null;
+      }
+    }
+
+    async function lookupSortId(dateStr, sortCode) {
+      const url = `${RUN_LOOKUP}?sortDate=${encodeURIComponent(dateStr)}&sortName=${encodeURIComponent(sortCode)}`;
+      const list = await fetchJson(url);
+      if (!Array.isArray(list) || !list.length) return null;
+      const id = Number(list[0].sortid ?? list[0].SORTID ?? list[0].SortId);
+      return Number.isFinite(id) && id > 0 ? id : null;
+    }
+
+
+
+    const fmtInt = n => {
+      if (n == null || !isFinite(Number(n))) return '—';
+      return Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
+    };
+    const fmtPct = n => (n == null || !isFinite(Number(n))) ? '—' : `${Number(n).toFixed(2)}%`;
+    const toNumber = x => { const n = Number(x); return Number.isFinite(n) ? n : 0; };
+
+    function normSideFromLocation(loc) {
+      const t = String(loc || '').trim().toLowerCase();
+      if (t.startsWith('n')) return 'North';
+      if (t.startsWith('s')) return 'South';
+      return 'Other';
+    }
+    function getBarColor(pct) {
+      if (pct == null || isNaN(pct)) return "bg-slate-500"; // fallback
+
+      if (pct <= 20) return "bg-green-500";
+      if (pct <= 25) return "bg-yellow-400";
+      return "bg-red-500";
+    }
+
+    function sideFromOutbound(ob) {
+      const s = String(ob || '').toUpperCase().replace(/\s+/g, '');
+      const m = s.match(/^OB0*([0-9]+)$/);
+      if (!m) return 'Other';
+      const i = Number(m[1]);
+      if (i >= 1 && i <= 5) return 'North';
+      if (i >= 6 && i <= 10) return 'South';
+      return 'Other';
+    }
+
+    async function fetchChuteFull(sortid) {
+      const url = `${CHUTE_FULL_URL}?sortid=${encodeURIComponent(String(sortid))}`;
+      const rows = await fetchJson(url);
+      return Array.isArray(rows) ? rows : [];
+    }
+
+    function aggregateChuteFullBySide(rows) {
+      const sides = { North: { cf: 0, input: 0 }, South: { cf: 0, input: 0 } };
+      for (const r of rows) {
+        let side = normSideFromLocation(r.location || r.Location);
+        if (side === 'Other') side = sideFromOutbound(r.outbound || r.Outbound);
+        if (side !== 'North' && side !== 'South') continue;
+
+        const cf = toNumber(r.chutefull ?? r.chutefulls ?? r.ChuteFull ?? r.chuteFull);
+        const iv = toNumber(r.InputVolume ?? r.input_volume ?? r.InputVol);
+        sides[side].cf += cf;
+        sides[side].input += iv;
+      }
+      const pct = (num, den) => den > 0 ? (num / den) * 100 : null;
+      return {
+        North: { totalCF: sides.North.cf, totalInput: sides.North.input, pct: pct(sides.North.cf, sides.North.input) },
+        South: { totalCF: sides.South.cf, totalInput: sides.South.input, pct: pct(sides.South.cf, sides.South.input) },
+      };
+    }
+
+    async function fetchOutboundRuntime(sortid) {
+      const url = `${UPTIME_URL}?${new URLSearchParams({ sortid: String(sortid) })}`;
+      const rows = await fetchJson(url);
+      return Array.isArray(rows) ? rows : (rows ? [rows] : []);
+    }
+
+    function aggregateUptimeBySide(rows) {
+      const sides = { North: { up: 0, run: 0 }, South: { up: 0, run: 0 } };
+      for (const r of rows) {
+        let side = normSideFromLocation(r.location || r.Location);
+        if (side === 'Other') side = sideFromOutbound(r.outbound || r.Outbound);
+        if (side !== 'North' && side !== 'South') continue;
+
+        const up = toNumber(r.uptime ?? r.Uptime ?? r.UPTIME);
+        const run = toNumber(r.runtime ?? r.Runtime ?? r.RUNTIME);
+        sides[side].up += up;
+        sides[side].run += run;
+      }
+      const pct = (up, run) => run > 0 ? (up / run) * 100 : null;
+      return {
+        North: { uptime: sides.North.up, runtime: sides.North.run, pct: pct(sides.North.up, sides.North.run) },
+        South: { uptime: sides.South.up, runtime: sides.South.run, pct: pct(sides.South.up, sides.South.run) },
+      };
+    }
+
+    async function fetchOutboundDefects(sortid) {
+      const url = `${TOTAL_DEFECTS_URL}?sortid=${encodeURIComponent(String(sortid))}`;
+      const obj = await fetchJson(url);
+
+      if (Array.isArray(obj?.outbounds)) {
+        return obj.outbounds;
+      }
+
+      if (Array.isArray(obj)) return obj;
+      return [];
+    }
+
+    function aggregateDefectsBySide(rows) {
+      const sides = { North: 0, South: 0 };
+      if (!Array.isArray(rows)) return { North: 0, South: 0 };
+
+      for (const r of rows) {
+        let side = normSideFromLocation(r?.location ?? r?.Location);
+        if (side === 'Other') side = sideFromOutbound(r?.outbound ?? r?.Outbound);
+        if (side !== 'North' && side !== 'South') continue;
+
+        const defects = toNumber(
+          r?.total_defects ?? r?.TotalDefects ?? r?.totalDefects ?? r?.defects
+        );
+        sides[side] += defects;
+      }
+      return { North: sides.North, South: sides.South };
+    }
+
+    async function fetchTotesUtilization(sortid) {
+      const url = `${TOTES_UTILIZATION_URL}?sortid=${encodeURIComponent(String(sortid))}`;
+      const obj = await fetchJson(url);
+
+      const total = Number(
+        obj.total_value ??
+        obj.totalValue ??
+        obj.value ??
+        0
+      );
+
+      return total;
+    }
+
+    async function fetchBuildingVolumeAndDefects(sortid) {
+      const url = `${BV_DEFECTS_URL}?sortid=${encodeURIComponent(String(sortid))}`;
+      const obj = await fetchJson(url);
+
+      const buildingArr = Array.isArray(obj?.buildingVolume) ? obj.buildingVolume : [];
+      const defectsArr = Array.isArray(obj?.totalDefects) ? obj.totalDefects : [];
+      const outbounds = Array.isArray(obj?.outbounds) ? obj.outbounds : [];
+      const defectRows = Array.isArray(obj?.defectRows) ? obj.defectRows : [];
+
+      const b0 = buildingArr[0] ?? {};
+      const bv = Number(b0?.BuildingVolume ?? NaN);
+      const td = Number(defectsArr[0]?.TotalDefects ?? NaN);
+
+      const totalBuildingVolume = Number.isFinite(bv) ? bv : 0;
+      const totalDefects = Number.isFinite(td) ? td : 0;
+
+      const defectPct = totalBuildingVolume > 0 ? Math.round((totalDefects / totalBuildingVolume) * 100) : null;
+
+
+      const { North: northOutboundDefects, South: southOutboundDefects } =
+        aggregateDefectsBySide(defectRows);
+
+      const northOutboundEndPct =
+        totalDefects > 0 && Number.isFinite(northOutboundDefects)
+          ? (northOutboundDefects / totalDefects) * 100
+          : null;
+
+      const southOutboundEndPct =
+        totalDefects > 0 && Number.isFinite(southOutboundDefects)
+          ? (southOutboundDefects / totalDefects) * 100
+          : null;
+
+      return {
+        resolvedSortId: Number(obj?.resolvedSortId ?? sortid) || sortid,
+        totalBuildingVolume,
+        totalDefects,
+        defectPct,
+
+
+        // IMPORTANT: we’ll inject smallSortVolume from smallSortRows in Dashboard
+        smallSortVolume: 0,
+
+        outbounds,
+        northOutboundDefects,
+        southOutboundDefects,
+        northOutboundEndPct,
+        southOutboundEndPct
+      };
+    }
+    function calcSmallSortVolumeFromSmallRows(rows) {
+      if (!Array.isArray(rows) || rows.length === 0) return 0;
+
+      const normalizeDevice = (name) => {
+        if (!name) return "";
+        const s = String(name).trim().toUpperCase().replace(/[\s_-]+/g, "");
+        const m = s.match(/^SLS0*(\d{1,2})$/);
+        if (m) return `SLS${String(Number(m[1])).padStart(2, "0")}`;
+        return s;
+      };
+
+      const MODULES_TO_SUM = new Set([
+        "SLS03", "SLS04", "SLS05", "SLS07", "SLS08",
+        "SLS10", "SLS11", "SLS12", "SLS13", "SLS14", "SLS15", "SLS16",
+        "NGSS"
+      ].map(normalizeDevice));
+
+      let sum = 0;
+      for (const r of rows) {
+        const dev = normalizeDevice(r.device ?? r.module);
+        if (!MODULES_TO_SUM.has(dev)) continue;
+
+        const n = Number(r.Total_volume);
+        if (Number.isFinite(n)) sum += n;
+      }
+      return sum;
+    }
+
+
+
+
+
+    const MANUAL_DEFAULTS = {
+      downtimeActual: '', downtimePlan: '',
+      staffingActual: '', staffingPlan: '',
+      feederStaffingActual: '', feederStaffingPlan: '',
+      movesScratchPad: '',
+      mechanicalBreakdown: '',
+      electricalBreakdown: '',
+      fodBreakdown: ''
+    };
+
+
+
+    function useManualRunNotes(sortid, employeeId) {
+      const [manual, setManual] = React.useState(MANUAL_DEFAULTS);
+      const [loadingNotes, setLoadingNotes] = React.useState(false);
+      const [notesError, setNotesError] = React.useState(null);
+      const [hasLoaded, setHasLoaded] = React.useState(false);
+      const [syncStatus, setSyncStatus] = React.useState('synced'); // 'synced' | 'saving' | 'error'
+      const [lastUpdatedBy, setLastUpdatedBy] = React.useState(null);
+      const [lastUpdatedAt, setLastUpdatedAt] = React.useState(null);
+
+      // Load notes when sortid changes
+      React.useEffect(() => {
+        console.log("Loading notes for sortid:", sortid);
+        if (!sortid) {
+          setManual(MANUAL_DEFAULTS);
+          setHasLoaded(false);
+          return;
+        }
+
+        const localKey = `manual_${sortid}`;
+        setLoadingNotes(true);
+        setNotesError(null);
+        setHasLoaded(false);
+        setManual(MANUAL_DEFAULTS);
+
+        (async () => {
+          try {
+            const res = await fetch(`${NOTES_URL}?sortid=${encodeURIComponent(sortid)}`, {
+              headers: { Accept: "application/json" },
+            });
+
+            if (!res.ok) {
+              throw new Error(`HTTP ${res.status} while loading notes`);
+            }
+
+            const data = await res.json();
+
+            if (data && typeof data === "object") {
+              // Server data takes priority - extract notes and metadata
+              const notes = data.notes || data;
+              setManual({ ...MANUAL_DEFAULTS, ...notes });
+              setLastUpdatedBy(data.updatedBy || null);
+              setLastUpdatedAt(data.updatedAt || null);
+
+              // Save to localStorage as backup only
+              localStorage.setItem(localKey, JSON.stringify(notes));
+
+              // Notify if updated by someone else
+              if (data.updatedBy && data.updatedBy !== employeeId) {
+                console.info(`Notes updated by ${data.updatedBy} at ${data.updatedAt}`);
+              }
+
+              setSyncStatus('synced');
+              setNotesError(null);
+            } else {
+              // Unexpected shape → fall back to local
+              const saved = localStorage.getItem(localKey);
+              setManual(saved ? { ...MANUAL_DEFAULTS, ...JSON.parse(saved) } : MANUAL_DEFAULTS);
+              setNotesError("Unexpected server response; using local backup.");
+            }
+          } catch (e) {
+            console.error("Failed to load notes from server:", e);
+            setNotesError("Could not load shared notes; using local backup.");
+
+            // Only fall back to localStorage if server is truly unreachable
+            const saved = localStorage.getItem(localKey);
+            setManual(saved ? { ...MANUAL_DEFAULTS, ...JSON.parse(saved) } : MANUAL_DEFAULTS);
+          } finally {
+            setHasLoaded(true);
+            setLoadingNotes(false);
+          }
+        })();
+      }, [sortid]);
+
+      // Save whenever notes change (for this sortid)
+      React.useEffect(() => {
+        if (!sortid || !hasLoaded) return;
+
+        const localKey = `manual_${sortid}`;
+        // Optimistic local save
+        localStorage.setItem(localKey, JSON.stringify(manual));
+
+        const controller = new AbortController();
+        setSyncStatus('saving');
+
+        (async () => {
+          try {
+            const res = await fetch(NOTES_URL, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Accept: "application/json",
+              },
+              body: JSON.stringify({
+                sortid,
+                notes: manual,
+                updatedBy: employeeId || 'Anonymous',
+                updatedAt: new Date().toISOString()
+              }),
+              signal: controller.signal,
+            });
+
+            if (!res.ok) {
+              const text = await res.text();
+              throw new Error(`HTTP ${res.status}: ${text}`);
+            }
+
+            setSyncStatus('synced');
+            setNotesError(null);
+          } catch (e) {
+            if (e.name !== 'AbortError') {
+              console.error("Failed to save notes to server:", e);
+              setSyncStatus('error');
+              setNotesError("Failed to save to server. Changes saved locally only.");
+            }
+          }
+        })();
+
+        return () => controller.abort();
+      }, [manual, sortid, hasLoaded, employeeId]);
+
+      return { manual, setManual, loadingNotes, notesError, syncStatus, lastUpdatedBy, lastUpdatedAt };
+    }
+
+
+
+
+    async function fetchCollectorDowntimeHours(sortid) {
+      const url = `${COLLECTOR_DT_URL}?sortid=${encodeURIComponent(String(sortid))}`;
+      const rows = await fetchJson(url);
+      const totalMinutes = (Array.isArray(rows) ? rows : []).reduce((sum, r) => {
+        const m = Number(r?.downtime);
+        return sum + (Number.isFinite(m) ? m : 0);
+      }, 0);
+      const hours = totalMinutes / 60;
+      return Number.isFinite(hours) ? Number(hours.toFixed(2)) : null;
+    }
+
+    async function fetchPrimaryLive(sortid) {
+      const url = `${PRIMARY_LIVE_URL}?sortid=${encodeURIComponent(String(sortid || ''))}`;
+      const data = await fetchJson(url);
+
+      if (!data) {
+        return [];
+      }
+
+      //  New format: { devices: [...], worst_performing_avg_read_rate: [...] }
+      if (data && Array.isArray(data.devices)) {
+        return data.devices;
+      }
+
+      //  Old format: root is already an array
+      if (Array.isArray(data)) {
+        return data;
+      }
+
+      //  Fallback: single object
+      return [data];
+    }
+    async function fetchPrimaryLiveMeta(sortid) {
+      const url = `${PRIMARY_LIVE_URL}?sortid=${encodeURIComponent(String(sortid || ''))}`;
+      const data = await fetchJson(url);
+
+      if (!data || !Array.isArray(data.worst_performing_avg_read_rate)) {
+        return null;
+      }
+
+      // Usually just 1 object in that array
+      return data.worst_performing_avg_read_rate[0];
+    }
+    function normalizeMostToGain(raw) {
+      if (!raw) return {
+        worstNoReadBySide: { North: [], South: [] },
+        worstChuteFullBySide: { North: [], South: [] }
+      };
+
+      // Handle cases where ASPX might wrap things differently
+      const worstNoRead = Array.isArray(raw.worst_no_read)
+        ? raw.worst_no_read
+        : Array.isArray(raw.WorstNoRead)
+          ? raw.WorstNoRead
+          : [];
+
+      const worstChuteFull = Array.isArray(raw.worst_chutefull)
+        ? raw.worst_chutefull
+        : Array.isArray(raw.WorstChuteFull)
+          ? raw.WorstChuteFull
+          : [];
+
+      const toNum = v => {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : 0;
+      };
+
+      // Make sure combined fields exist as numbers
+      const cleanNoRead = worstNoRead.map(r => {
+        const noRead = toNum(r.no_read_pct ?? r.no_read ?? r.NoReadPct);
+        const noTrack = toNum(r.no_track_pct ?? r.no_track ?? r.NoTrackPct);
+
+        const combined = (r.combined_no_read_pct != null)
+          ? toNum(r.combined_no_read_pct)
+          : (noRead + noTrack);
+
+        return {
+          location: r.location ?? r.Location ?? '',
+          outbound: r.outbound ?? r.Outbound ?? '',
+          sortid: Number(r.sortid ?? r.SortId ?? r.SORTID ?? 0),
+          module: r.module ?? r.Module ?? '',
+          device: r.device ?? r.Device ?? '',
+          no_read_pct: noRead,
+          no_track_pct: noTrack,
+          combined_no_read_pct: combined,
+          side: r.side ?? r.Side ?? 'Other'
+        };
+      });
+
+      const cleanChuteFull = worstChuteFull.map(r => {
+        const cf = toNum(r.chutefull_pct ?? r.ChuteFullPct);
+        const dt = toNum(r.downtime_pct ?? r.DowntimePct);
+
+        // per latest requirement, combined_chutefull_pct === chutefull_pct
+        const combined = (r.combined_chutefull_pct != null)
+          ? toNum(r.combined_chutefull_pct)
+          : cf;
+
+        return {
+          location: r.location ?? r.Location ?? '',
+          outbound: r.outbound ?? r.Outbound ?? '',
+          sortid: Number(r.sortid ?? r.SortId ?? r.SORTID ?? 0),
+          module: r.module ?? r.Module ?? '',
+          device: r.device ?? r.Device ?? '',
+          chutefull_pct: cf,
+          downtime_pct: dt,
+          combined_chutefull_pct: combined,
+          side: r.side ?? r.Side ?? 'Other'
+        };
+      });
+
+      // Split & sort by side (North / South)
+      const splitBySide = (rows, field) => {
+        const bySide = { North: [], South: [] };
+        for (const r of rows) {
+          const s = String(r.side || '').trim();
+          if (s === 'North' || s === 'South') {
+            bySide[s].push(r);
+          }
+        }
+        Object.keys(bySide).forEach(side => {
+          bySide[side].sort((a, b) => toNum(b[field]) - toNum(a[field]));
+        });
+        return bySide;
+      };
+
+      return {
+        worstNoReadBySide: splitBySide(cleanNoRead, 'combined_no_read_pct'),
+        worstChuteFullBySide: splitBySide(cleanChuteFull, 'combined_chutefull_pct')
+      };
+    }
+
+
+    function getField(row, keys) {
+      for (const k of keys) {
+        const v = row[k];
+        if (v == null) continue;
+        const n = Number(v);
+        if (Number.isFinite(n)) return n;
+      }
+      return null;
+    }
+
+
+    /**
+     * Fetch Small Sort data and map it into a clean structure.
+     *
+     * @param {string} sortDate - in format "12-11-2025" (MM-DD-YYYY or as your API expects)
+     * @param {string} sortType - e.g. "S", "D", etc.
+     * @returns {Promise<Array>} array of objects with the fields you care about
+     */
+    async function fetchSmallSortData(sortDate, sortType) {
+      const params = new URLSearchParams();
+      if (sortDate) params.append("SortDate", sortDate);
+      if (sortType) params.append("SortType", sortType);
+
+      const url = `${SMALL_SORT_URL}?${params.toString()}&_cb=${Date.now()}`;
+
+      const res = await fetch(url, {
+        method: "GET",
+        cache: "no-store",
+        headers: { Accept: "application/json", "Cache-Control": "no-cache", "Pragma": "no-cache" }
+      });
+
+      if (!res.ok) throw new Error(`HTTP ${res.status} - ${res.statusText}`);
+
+      const raw = await res.json();
+      const rows = Array.isArray(raw) ? raw : [raw];
+      if (!rows.length) return [];
+
+      // Normalize device strings to avoid mismatch: SLS3/SLS03/SLS-03/SLS_03/SLS 03 -> SLS03
+      const normalizeDevice = (name) => {
+        if (!name) return "";
+        const s = String(name)
+          .trim()
+          .toUpperCase()
+          .replace(/[\s_-]+/g, ""); // remove spaces, underscores, hyphens
+
+        // SLS3, SLS03, SLS003 -> SLS03 (2-digit)
+        const m = s.match(/^SLS0*(\d{1,2})$/);
+        if (m) {
+          const num = Number(m[1]);
+          if (Number.isFinite(num)) {
+            return `SLS${String(num).padStart(2, "0")}`;
+          }
+        }
+        return s; // BF1, BF2, NGSS, etc.
+      };
+
+      const isBullfrog = (dev) => /^BF\d+$/i.test(String(dev || "").trim());
+
+      // For canonical SLS03, accept either SLS03_Total or SLS3_Total
+      const deviceVariants = (canonical) => {
+        const c = normalizeDevice(canonical);
+        const m = c.match(/^SLS(\d{2})$/);
+        if (!m) return [c];
+        const num = Number(m[1]); // 03 -> 3
+        return [c, `SLS${num}`];
+      };
+
+      const getTotalForDevice = (obj, deviceName) => {
+        const canon = normalizeDevice(deviceName);
+        // ✅ Do not read BF totals into Smalls
+        if (isBullfrog(canon)) return null;
+
+        for (const v of deviceVariants(canon)) {
+          // 1) SLS modules use _TotalVolume
+          const k1 = `${v}_TotalVolume`;
+          if (obj && obj[k1] != null) return obj[k1];
+        }
+        return null;
+      };
+
+      function getLoose(obj, wantedKeys = []) {
+        if (!obj || typeof obj !== "object") return null;
+
+        // 1) exact match first
+        for (const k of wantedKeys) {
+          if (obj[k] != null) return obj[k];
+        }
+
+        // 2) loose match (ignore spaces, commas, %, NBSP, case)
+        const norm = (s) =>
+          String(s)
+            .toLowerCase()
+            .replace(/\u00a0/g, " ")     // NBSP -> space
+            .replace(/[%(),]/g, "")     // drop punctuation that changes often
+            .replace(/\s+/g, "")        // drop whitespace
+            .trim();
+
+        const wanted = new Set(wantedKeys.map(norm));
+
+        for (const [k, v] of Object.entries(obj)) {
+          if (wanted.has(norm(k)) && v != null) return v;
+        }
+
+        return null;
+      }
+
+      // Devices you want guaranteed as rows (use canonical names here)
+      const devicesToEnsure = [
+        "BF1", "BF2",
+        "SLS03", "SLS04", "SLS05", "SLS07", "SLS08", "SLS10", "SLS11", "SLS12", "SLS13", "SLS14", "SLS15", "SLS16",
+        "NGSS"
+      ].map(normalizeDevice);
+
+      // Robust getter for "Exception Bags Closed" (handles common key/name variants)
+      const getExceptionBagsClosed = (r) =>
+        r["Exception Bags Closed"] ??
+        r["Exception Bags Closed "] ??          // trailing space
+        r["Exception_Bags_Closed"] ??
+        r.ExceptionBagsClosed ??
+        r.exceptionBagsClosed ??
+        r.acb_hopper_exe_bags_total ??
+        r.ACB_HOPPER_EXE_BAGS_TOTAL ??
+        null;
+
+      // 1) Map existing rows + add Total_volume
+      const mapped = rows.map(r => {
+        const rawDevice = (r.DEVICE ?? r.Device ?? r.device ?? r.module ?? "").toString();
+        const device = normalizeDevice(rawDevice);
+        if (isBullfrog(device)) return null;
+        // Prefer unified values if present
+        const unifiedFph = r.Unified_FPH ?? r.unified_fph ?? null;
+        const unifiedUptime = r.Unified_SorterUptimePct ?? r.unified_sorteruptimepct ?? null;
+
+
+
+        const slsFph = getLoose(r, [
+          "FPH (Scanned 8,500)",
+          "FPH (Scanned 8500)",
+          "FPH"
+        ]);
+
+        const slsUptime = getLoose(r, [
+          "Sorter Uptime%",
+          "Sorter Uptime %"
+        ]);
+
+        const slsChute = getLoose(r, [
+          "Chute Full OTE",
+          "Chute Full OTE %"
+        ]);
+
+        const slsTakeaway = getLoose(r, [
+          "Take away Not Running OTE (1%)",
+          "Takeaway Not Running OTE (1%)"
+        ]);
+
+
+        return {
+          device,
+          module: device || null,
+
+          // single total column
+          Total_volume: r.Total_Volume ??          // <-- your NGSS response uses this
+            r.Total_volume ??          // <-- just in case
+            (device ? getTotalForDevice(r, device) : null),
+
+          // ✅ FIXED: metrics (Unified -> device-specific -> legacy keys)
+          fph:
+            unifiedFph ??
+
+            slsFph ??
+            null,
+
+          sorterUptime:
+            unifiedUptime ??
+
+            slsUptime ??
+            null,
+
+          chuteFullOTE:
+
+            slsChute ??
+            null,
+
+          takeawayNotRunningOTE:
+
+            slsTakeaway ??
+            null,
+
+          exceptionBagsClosed: getExceptionBagsClosed(r),
+          noReadsPercent: r["No Reads%"] ?? r.noReadsPercent ?? r.NoReadsPercent ?? null,
+
+          // metadata
+          slsId: r.SLS_ID ?? r.sls_id ?? null,
+          sortDate: r.SortDate ?? r.sortDate ?? null,
+          sortType: r.SortType ?? r.sortType ?? null,
+          startTs: r.StartTS ?? r.startTs ?? null,
+          endTs: r.EndTS ?? r.endTs ?? null,
+          sortState: r.SortState ?? r.sortState ?? null
+        };
+      }).filter(Boolean);
+
+
+      // Track what devices already exist (canonical)
+      const existing = new Set(mapped.map(x => normalizeDevice(x.device)).filter(Boolean));
+
+      // Use first row as totals source (subquery totals are same for that date/sortType)
+      const totalsSource = rows[0];
+
+      // 2) Add missing device rows (only if not already present)
+      for (const d of devicesToEnsure) {
+        if (existing.has(d)) continue;
+
+        mapped.push({
+          device: d,
+          module: d,
+          Total_volume: getTotalForDevice(totalsSource, d),
+
+          // metrics are unknown for synthetic rows (no record in vSLS_Post_Summary_Report)
+          fph: null,
+          sorterUptime: null,
+          chuteFullOTE: null,
+          takeawayNotRunningOTE: null,
+          exceptionBagsClosed: null,
+          noReadsPercent: null,
+
+          slsId: null,
+          sortDate: sortDate ?? rows[0].SortDate ?? rows[0].sortDate ?? null,
+          sortType: sortType ?? rows[0].SortType ?? rows[0].sortType ?? null,
+          startTs: null,
+          endTs: null,
+          sortState: null
+        });
+
+        existing.add(d);
+      }
+
+      // Deduplicate by device (keep the “best” row)
+      const deduped = new Map();
+
+      for (const r of mapped) {
+        const key = normalizeDevice(r.device);
+        const prev = deduped.get(key);
+
+        // Prefer the row that has a Total_volume (or any metrics), otherwise keep first
+        const score = (x) =>
+          (x?.Total_volume != null ? 10 : 0) +
+          (x?.fph != null ? 3 : 0) +
+          (x?.sorterUptime != null ? 2 : 0);
+
+        if (!prev || score(r) > score(prev)) deduped.set(key, r);
+      }
+
+      return Array.from(deduped.values()).filter(r => !isBullfrog(r.device));
+    }
+
+
+
+
+
+    function computePSandRCStats(rows) {
+      const norm = s => String(s || '').toUpperCase().replace(/\s+/g, '');
+      const isPSCode = code => {
+        const m = code.match(/^PS(\d{1,2})$/);
+        if (!m) return false;
+        const n = Number(m[1]);
+        return Number.isFinite(n) && n >= 1 && n <= 46;
+      };
+      const isRC01 = code => /^RC0?1$/.test(code);
+      const isRC02 = code => /^RC0?2$/.test(code);
+      const isRC03 = code => /^RC0?3$/.test(code);
+      const isRC04 = code => /^RC0?4$/.test(code);
+
+      const psUptime = [], psRead = [], psChute = [];
+      const rc01Uptime = [], rc02Uptime = [], rc03Uptime = [], rc04Uptime = [];
+      const rc01Chute = [], rc02Chute = [], rc03Chute = [], rc04Chute = [];
+
+      for (const r of rows) {
+        const code = norm(r.device || r.Device || r.DEVICE || '');
+        if (!code) continue;
+        const uptime = getField(r, ['primary_uptime_pct', 'PrimaryUptimePct', 'uptime_pct', 'UptimePct', 'uptime']);
+        const read = getField(r, ['primary_read_rate', 'PrimaryReadRate', 'read_rate', 'ReadRate']);
+        const chute = getField(r, ['chutefull_pct', 'ChuteFullPct', 'chutefull', 'ChuteFull']);
+
+        if (isPSCode(code)) {
+          if (uptime != null) psUptime.push(uptime);
+          if (read != null) psRead.push(read);
+          if (chute != null) psChute.push(chute);
+        }
+        if (isRC01(code)) { if (uptime != null) rc01Uptime.push(uptime); if (chute != null) rc01Chute.push(chute); }
+        if (isRC02(code)) { if (uptime != null) rc02Uptime.push(uptime); if (chute != null) rc02Chute.push(chute); }
+        if (isRC03(code)) { if (uptime != null) rc03Uptime.push(uptime); if (chute != null) rc03Chute.push(chute); }
+        if (isRC04(code)) { if (uptime != null) rc04Uptime.push(uptime); if (chute != null) rc04Chute.push(chute); }
+      }
+
+      const avg = arr => arr.length ? (arr.reduce((a, b) => a + b, 0) / arr.length) : null;
+
+      const psAvgUptime = avg(psUptime);
+      const psAvgRead = avg(psRead);
+      const psAvgChute = avg(psChute);
+      const psAvgNoRead = (psAvgRead != null ? (100 - psAvgRead) : null);
+      const rcCollector = {
+        rc1UptimePct: avg(rc01Uptime),
+        rc2UptimePct: avg(rc02Uptime),
+        rc3UptimePct: avg(rc03Uptime),
+        rc4UptimePct: avg(rc04Uptime),
+        rc1ChutePct: avg(rc01Chute),
+        rc2ChutePct: avg(rc02Chute),
+        rc3ChutePct: avg(rc03Chute),
+        rc4ChutePct: avg(rc04Chute),
+      };
+
+      return { psAvgUptime, psAvgRead, psAvgChute, psAvgNoRead, rcCollector };
+    }
+    const STATE_PARAM = 'state';
+
+    function getPerformanceColor(pct) {
+      const n = Number(pct);
+      if (!Number.isFinite(n)) return "text-slate-300"; // fallback
+
+      if (n >= 95) return "text-green-400";
+      if (n >= 92) return "text-yellow-300";
+      return "text-red-400";
+    }
+
+   
+
+    function getLowPctPerformanceColor(pct) {
+      const n = Number(pct);
+      if (!Number.isFinite(n)) return "text-slate-300"; // fallback
+
+      if (n <= 3) return "text-green-400";
+      if (n <= 6) return "text-yellow-300";
+      return "text-red-400";
+    }
+
+
+    // Optional: if you want a colored badge background instead of just text
+    function getPerformanceBadge(pct) {
+      const n = Number(pct);
+      if (!Number.isFinite(n)) return "bg-slate-700/40 text-slate-200 border-slate-600";
+
+      if (n >= 95) return "bg-green-500/15 text-green-300 border-green-500/30";
+      if (n >= 92) return "bg-yellow-500/15 text-yellow-200 border-yellow-500/30";
+      return "bg-red-500/15 text-red-200 border-red-500/30";
+    }
+
+    function getDefectPerformanceBadge(pct) {
+      const n = Number(pct);
+      if (!Number.isFinite(n)) return "bg-slate-700/40 text-slate-200 border-slate-600";
+
+      if (n <= 20) return "bg-green-500/15 text-green-300 border-green-500/30";
+      if (n <= 25) return "bg-yellow-500/15 text-yellow-200 border-yellow-500/30";
+      return "bg-red-500/15 text-red-200 border-red-500/30";
+    }
+
+    function getLowPctPerformanceBadge(pct) {
+      const n = Number(pct);
+      if (!Number.isFinite(n)) return "bg-slate-700/40 text-slate-200 border-slate-600";
+
+      if (n <= 3) return "bg-green-500/15 text-green-300 border-green-500/30";
+      if (n <= 6) return "bg-yellow-500/15 text-yellow-200 border-yellow-500/30";
+      return "bg-red-500/15 text-red-200 border-red-500/30";
+    }
+
+    // Read sortDate / sortName from URL if present
+    function getInitialSortParams() {
+      const params = new URLSearchParams(window.location.search);
+      const sortDate = params.get('sortDate') || todayStr();
+      const sortName = params.get('sortName') || 'D';
+      return { sortDate, sortName };
+    }
+
+    // If a shared state is present in ?state=..., hydrate localStorage with manual notes
+    (function hydrateSharedStateFromUrl() {
+      const params = new URLSearchParams(window.location.search);
+      const raw = params.get(STATE_PARAM);
+      if (!raw) return;
+
+      try {
+        const decoded = JSON.parse(atob(decodeURIComponent(raw)));
+
+        if (decoded.manualKey && decoded.manual) {
+          localStorage.setItem(decoded.manualKey, JSON.stringify(decoded.manual));
+          console.log('Hydrated manual notes from shared URL for key:', decoded.manualKey);
+        }
+      } catch (e) {
+        console.error('Failed to hydrate shared state from URL:', e);
+      }
+    })();
+    function getMetricUnit(metricKey) {
+      const k = String(metricKey || "").toLowerCase();
+
+      if (k.includes("%") || k.includes("percent")) return "pct";
+      if (k.includes("minute")) return "minutes";
+
+      // everything else treated as a plain count
+      return "count";
+    }
+
+    // ====== Advanced Graph Component ======
+    function AdvancedGraphs({ current, backRuns, displayedMetrics, getMetricValue }) {
+      const [selectedMetrics, setSelectedMetrics] = useState([]);
+      const [chartType, setChartType] = useState('line'); // line, bar, area
+      const [showTrend, setShowTrend] = useState(false);
+      const [showStats, setShowStats] = useState(true);
+
+      const mainChartRef = useRef(null);
+      const mainChart = useRef(null);
+
+      // Auto-select first 3 metrics on load
+      useEffect(() => {
+        if (selectedMetrics.length === 0 && displayedMetrics.length > 0) {
+          setSelectedMetrics(displayedMetrics.slice(0, Math.min(3, displayedMetrics.length)));
+        }
+      }, [displayedMetrics, selectedMetrics.length]);
+
+      const toggleMetric = (metric) => {
+        setSelectedMetrics(prev => {
+          if (prev.includes(metric)) {
+            return prev.filter(m => m !== metric);
+          } else if (prev.length < 8) {
+            return [...prev, metric];
+          }
+          return prev;
+        });
+      };
+
+      // Calculate statistics for selected metrics
+      const metricStats = useMemo(() => {
+        if (!current || selectedMetrics.length === 0) return {};
+
+        const allRuns = [...backRuns, current];
+        const stats = {};
+
+        selectedMetrics.forEach(metric => {
+          const values = allRuns
+            .map(r => {
+              const val = getMetricValue(metric, r);
+              return Number(val);
+            })
+            .filter(v => Number.isFinite(v));
+
+          if (values.length > 0) {
+            const min = Math.min(...values);
+            const max = Math.max(...values);
+            const avg = values.reduce((a, b) => a + b, 0) / values.length;
+
+            // Calculate trend (simple linear regression slope)
+            let trend = 0;
+            if (values.length > 1) {
+              const n = values.length;
+              const sumX = (n * (n - 1)) / 2;
+              const sumY = values.reduce((a, b) => a + b, 0);
+              const sumXY = values.reduce((sum, val, i) => sum + (i * val), 0);
+              const sumX2 = (n * (n - 1) * (2 * n - 1)) / 6;
+              trend = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+            }
+
+            const currentVal = getMetricValue(metric, current);
+            stats[metric] = {
+              min,
+              max,
+              avg,
+              trend,
+              current: Number(currentVal),
+              change: values.length > 1 ? Number(currentVal) - values[values.length - 2] : 0
+            };
+          }
+        });
+
+        return stats;
+      }, [current, backRuns, selectedMetrics, getMetricValue]);
+
+      // Destroy chart on cleanup
+      useEffect(() => {
+        return () => {
+          if (mainChart.current) {
+            mainChart.current.destroy();
+            mainChart.current = null;
+          }
+        };
+      }, []);
+
+      // Create/update main chart
+      useEffect(() => {
+        if (!current || selectedMetrics.length === 0) return;
+
+        // destroy previous chart if it exists
+        if (mainChart.current) {
+          mainChart.current.destroy();
+          mainChart.current = null;
+        }
+
+        const allRuns = [...backRuns, current];
+        const labels = allRuns.map(r => r.date);
+
+        // tie each dataset to either yPercent or yCount
+        const datasets = selectedMetrics.map((metric, idx) => {
+          const color = CHART_COLORS[idx % CHART_COLORS.length];
+          const unit = getMetricUnit(metric);
+          const yAxisID = unit === "pct" ? "yPercent" : "yCount";
+
+          const data = allRuns.map(r => {
+            const val = getMetricValue(metric, r);
+            return Number(val);
+          });
+
+          const baseDataset = {
+            label: metric,
+            data,
+            yAxisID, // 👈 this is the key part
+            borderColor: color.border,
+            backgroundColor: chartType === "area" ? color.bg : color.border,
+            borderWidth: 2,
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            pointBackgroundColor: color.border,
+            pointBorderColor: "#fff",
+            pointBorderWidth: 2,
+          };
+
+          if (chartType === "line" || chartType === "area") {
+            baseDataset.tension = 0.4;
+            baseDataset.fill = chartType === "area";
+          }
+
+          return baseDataset;
+        });
+
+        if (!mainChartRef.current) return;
+        const ctx = mainChartRef.current.getContext("2d");
+
+        mainChart.current = new Chart(ctx, {
+          type: chartType === "area" ? "line" : chartType,
+          data: { labels, datasets },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+              mode: "index",
+              intersect: false,
+            },
+            plugins: {
+              legend: {
+                display: true,
+                position: "top",
+                labels: {
+                  color: "#cbd5e1",
+                  font: { size: 12, family: "Work Sans" },
+                  padding: 15,
+                  usePointStyle: true,
+                  pointStyle: "circle",
+                },
+              },
+              tooltip: {
+                backgroundColor: "rgba(15, 23, 42, 0.95)",
+                titleColor: "#f1f5f9",
+                bodyColor: "#cbd5e1",
+                borderColor: "rgba(148, 163, 184, 0.3)",
+                borderWidth: 1,
+                padding: 12,
+                displayColors: true,
+                callbacks: {
+                  label: function (context) {
+                    const label = context.dataset.label || "";
+                    const unit = getMetricUnit(label);
+                    const y = context.parsed.y;
+
+                    if (!Number.isFinite(y)) return `${label}: —`;
+
+                    if (unit === "pct") {
+                      return `${label}: ${y.toFixed(2)}%`;
+                    } else {
+                      return `${label}: ${y.toLocaleString()}`;
+                    }
+                  },
+                },
+              },
+            },
+            scales: {
+              x: {
+                grid: {
+                  color: "rgba(148, 163, 184, 0.1)",
+                  drawBorder: false,
+                },
+                ticks: {
+                  color: "#94a3b8",
+                  font: { size: 11, family: "Space Mono" },
+                },
+              },
+              yPercent: {
+                type: "linear",
+                position: "left",
+                grid: {
+                  color: "rgba(148, 163, 184, 0.1)",
+                  drawBorder: false,
+                },
+                ticks: {
+                  color: "#94a3b8",
+                  font: { size: 11, family: "Space Mono" },
+                  callback: (value) => `${value}%`,
+                },
+                title: {
+                  display: true,
+                  text: "Percent metrics",
+                  color: "#cbd5e1",
+                  font: { size: 11, family: "Work Sans" },
+                },
+              },
+              yCount: {
+                type: "linear",
+                position: "right",
+                grid: {
+                  drawOnChartArea: false, // keep from double-grid
+                },
+                ticks: {
+                  color: "#94a3b8",
+                  font: { size: 11, family: "Space Mono" },
+                  callback: (value) => value.toLocaleString(),
+                },
+                title: {
+                  display: true,
+                  text: "Counts / Volume / Minutes",
+                  color: "#cbd5e1",
+                  font: { size: 11, family: "Work Sans" },
+                },
+              },
+            },
+          },
+        });
+
+        // cleanup if component unmounts or deps change
+        return () => {
+          if (mainChart.current) {
+            mainChart.current.destroy();
+            mainChart.current = null;
+          }
+        };
+      }, [current, backRuns, selectedMetrics, chartType, getMetricValue]);
+
+
+      if (!current) return null;
+
+      return (
+        <div className="space-y-6 animate-slide-in">
+          {/* Header */}
+          <div className="glass-effect rounded-2xl p-6">
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <h2 className="text-2xl font-bold text-white mb-1">Advanced Metric Analysis</h2>
+                <p className="text-slate-400 text-sm">Compare multiple metrics across time with interactive visualizations</p>
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setChartType('line')}
+                  className={`px-4 py-2 rounded-lg font-medium transition-all ${chartType === 'line'
+                    ? 'bg-cyan-500 text-white'
+                    : 'bg-slate-700/50 text-slate-300 hover:bg-slate-700'
+                    }`}
+                >
+                  Line
+                </button>
+                <button
+                  onClick={() => setChartType('bar')}
+                  className={`px-4 py-2 rounded-lg font-medium transition-all ${chartType === 'bar'
+                    ? 'bg-cyan-500 text-white'
+                    : 'bg-slate-700/50 text-slate-300 hover:bg-slate-700'
+                    }`}
+                >
+                  Bar
+                </button>
+                <button
+                  onClick={() => setChartType('area')}
+                  className={`px-4 py-2 rounded-lg font-medium transition-all ${chartType === 'area'
+                    ? 'bg-cyan-500 text-white'
+                    : 'bg-slate-700/50 text-slate-300 hover:bg-slate-700'
+                    }`}
+                >
+                  Area
+                </button>
+              </div>
+            </div>
+
+            {/* Metric Selection Pills */}
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <label className="text-sm font-medium text-slate-300">
+                  Select Metrics to Compare (up to 8)
+                </label>
+                <span className="text-xs text-slate-500 mono">
+                  {selectedMetrics.length} / 8 selected
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {displayedMetrics.map((metric, idx) => (
+                  <button
+                    key={metric}
+                    onClick={() => toggleMetric(metric)}
+                    className={`metric-pill px-4 py-2 rounded-full text-sm font-medium border-2 ${selectedMetrics.includes(metric)
+                      ? 'active text-white'
+                      : 'bg-slate-800/50 border-slate-600 text-slate-300 hover:border-slate-500'
+                      }`}
+                  >
+                    {metric}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {selectedMetrics.length > 0 && (
+            <>
+              {/* Main Chart */}
+              <div className="glass-effect rounded-2xl p-6">
+                <div className="graph-container">
+                  <canvas ref={mainChartRef}></canvas>
+                </div>
+              </div>
+
+              {/* Statistics Cards */}
+              {showStats && (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {selectedMetrics.map((metric, idx) => {
+                    const stats = metricStats[metric];
+                    if (!stats) return null;
+
+                    const color = CHART_COLORS[idx % CHART_COLORS.length];
+                    const trendDirection = stats.trend > 0.1 ? '↗' : stats.trend < -0.1 ? '↘' : '→';
+                    const trendColor = stats.trend > 0.1 ? 'text-green-400' : stats.trend < -0.1 ? 'text-red-400' : 'text-slate-400';
+
+                    return (
+                      <div
+                        key={metric}
+                        className="glass-effect rounded-xl p-5 border-l-4"
+                        style={{ borderLeftColor: color.border }}
+                      >
+                        <div className="flex items-start justify-between mb-3">
+                          <h3 className="text-white font-semibold text-sm">{metric}</h3>
+                          <span className={`text-2xl ${trendColor}`}>{trendDirection}</span>
+                        </div>
+
+                        <div className="space-y-2">
+                          <div className="flex justify-between items-center">
+                            <span className="text-xs text-slate-400">Current</span>
+                            <span className="text-lg font-bold text-white mono">
+                              {stats.current.toFixed(2)}
+                            </span>
+                          </div>
+
+                          <div className="flex justify-between items-center">
+                            <span className="text-xs text-slate-400">Change</span>
+                            <span className={`text-sm font-semibold mono ${stats.change > 0 ? 'text-green-400' : stats.change < 0 ? 'text-red-400' : 'text-slate-400'
+                              }`}>
+                              {stats.change > 0 ? '+' : ''}{stats.change.toFixed(2)}
+                            </span>
+                          </div>
+
+                          <div className="pt-2 border-t border-slate-700/50 space-y-1">
+                            <div className="flex justify-between text-xs">
+                              <span className="text-slate-500">Min</span>
+                              <span className="text-slate-300 mono">{stats.min.toFixed(2)}</span>
+                            </div>
+                            <div className="flex justify-between text-xs">
+                              <span className="text-slate-500">Avg</span>
+                              <span className="text-slate-300 mono">{stats.avg.toFixed(2)}</span>
+                            </div>
+                            <div className="flex justify-between text-xs">
+                              <span className="text-slate-500">Max</span>
+                              <span className="text-slate-300 mono">{stats.max.toFixed(2)}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          )}
+
+          {selectedMetrics.length === 0 && (
+            <div className="glass-effect rounded-2xl p-12 text-center">
+              <div className="text-slate-400 mb-2">
+                <svg className="w-16 h-16 mx-auto mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                </svg>
+              </div>
+              <p className="text-lg font-medium text-white mb-1">Select metrics to visualize</p>
+              <p className="text-sm text-slate-400">Choose up to 8 metrics from the pills above to start analyzing trends</p>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function Dashboard() {
+      const initialParams = getInitialSortParams();
+      const [sortDate, setSortDate] = useState(initialParams.sortDate);
+      const [sortName, setSortName] = useState(initialParams.sortName);
+      const [employeeId, setEmployeeId] = useState(null);
+
+
+      const [sortTypes, setSortTypes] = useState([
+        { SortType: 'S', SortNameMap: 'Sunrise' },
+        { SortType: 'D', SortNameMap: 'Day' },
+        { SortType: 'T', SortNameMap: 'Twilight' },
+        { SortType: 'N', SortNameMap: 'Night' },
+      ]);
+
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState(null);
+
+      const [sortState, setSortState] = useState(null);
+      const [sortStateErr, setSortStateErr] = useState(null);
+
+      const [current, setCurrent] = useState(null);
+      const [totals, setTotals] = useState(null)
+      const [totalsErr, setTotalsErr] = useState(null);
+
+      const [chuteFullAgg, setChuteFullAgg] = useState(null);
+      const [chuteFullErr, setChuteFullErr] = useState(null);
+      const [outboundAgg, setOutboundAgg] = useState(null);
+      const [outboundErr, setOutboundErr] = useState(null);
+
+      const [outboundDefects, setOutboundDefects] = useState(null);
+      const [outboundDefectsErr, setOutboundDefectsErr] = useState(null);
+
+      const [psStats, setPsStats] = useState(null);
+      const [psErr, setPsErr] = useState(null);
+
+      const [downtimeHours, setDowntimeHours] = useState(null);
+      const [downtimeErr, setDowntimeErr] = useState(null);
+
+      const [backRuns, setBackRuns] = useState([]);
+      const [numBack, setNumBack] = useState(7);
+
+      const [totesTotal, setTotesTotal] = useState(null);
+      const [totesErr, setTotesErr] = useState(null);
+
+      const [smallSortRows, setSmallSortRows] = useState([]);
+      const [smallSortLoading, setSmallSortLoading] = useState(false);
+      const [smallSortError, setSmallSortError] = useState(null);
+
+      const [primaryWorstMeta, setPrimaryWorstMeta] = useState(null);
+      const [primaryWorstErr, setPrimaryWorstErr] = useState(null);
+
+      const [mostToGain, setMostToGain] = useState(null);
+      const [mostToGainErr, setMostToGainErr] = useState(null);
+
+
+      const [selectedMetrics, setSelectedMetrics] = useState([]);
+
+      const numericMetrics = useMemo(() => {
+        const sample = current?.row || {};
+        const out = {};
+        for (const [k, v] of Object.entries(sample)) {
+          if (KEY_FIELDS.includes(k)) continue;
+          const n = Number(v);
+          if (Number.isFinite(n)) out[k] = n;
+        }
+        return Object.keys(out);
+      }, [current]);
+
+      const lineRef = useRef(null);
+      const barRef = useRef(null);
+      const lineChart = useRef(null);
+      const barChart = useRef(null);
+
+      const combinedTotals = useMemo(() => {
+        const safe = v => Number.isFinite(Number(v)) ? Number(v) : 0;
+        const cfN = safe(chuteFullAgg?.North?.totalCF) + safe(chuteFullAgg?.South?.totalCF);
+        const cfD = safe(chuteFullAgg?.North?.totalInput) + safe(chuteFullAgg?.South?.totalInput);
+        const upN = safe(outboundAgg?.North?.uptime) + safe(outboundAgg?.South?.uptime);
+        const upD = safe(outboundAgg?.North?.runtime) + safe(outboundAgg?.South?.runtime);
+        return {
+          cfNum: cfN,
+          cfDen: cfD,
+          totalChutefullPct: (cfD > 0 ? (cfN / cfD) * 100 : null),
+          upNum: upN,
+          upDen: upD,
+          totalUptimePct: (upD > 0 ? (upN / upD) * 100 : null)
+        };
+      }, [chuteFullAgg, outboundAgg]);
+
+      const totalDefectsForSide = totals?.totalDefects ?? 0;
+
+      useEffect(() => {
+        (async () => {
+          try {
+            const list = await fetchJson(TYPE_LOOKUP);
+            if (Array.isArray(list) && list.length) {
+              const cleaned = list.map(x => ({
+                SortType: String(x.SortType || '').trim().toUpperCase(),
+                SortNameMap: String(x.SortNameMap || '').trim()
+              }));
+              setSortTypes(cleaned);
+              if (!cleaned.some(x => x.SortType === sortName)) {
+                setSortName(cleaned[0].SortType || 'D');
+              }
+            }
+          } catch { }
+        })();
+      }, []);
+
+      const currentSortId = current?.sortid ?? null;
+      const { manual, setManual, loadingNotes, notesError, syncStatus, lastUpdatedBy, lastUpdatedAt } = useManualRunNotes(currentSortId, employeeId);
+
+
+      async function onFetch() {
+        setLoading(true);
+        // Clear only error states - preserve data until new fetch succeeds
+        setError(null);
+        setTotalsErr(null);
+        setChuteFullErr(null);
+        setOutboundErr(null);
+        setOutboundDefectsErr(null);
+        setPsErr(null);
+        setDowntimeErr(null);
+        setTotesErr(null);
+        setSortStateErr(null);
+        setSmallSortError(null);
+        setSmallSortLoading(true);
+        setPrimaryWorstErr(null);
+        setMostToGainErr(null);
+
+        try {
+          const sortid = await lookupSortId(sortDate, sortName);
+          if (!sortid) {
+            // Try to load from cache
+            const cacheKey = `${sortDate}_${sortName}`;
+            const cached = loadDashboardState(cacheKey);
+            if (cached) {
+              const cacheAge = Math.floor((Date.now() - cached.timestamp) / 1000 / 60);
+              setError(`Server unavailable. Showing cached data from ${cacheAge} minute(s) ago.`);
+              // Restore cached state
+              if (cached.data.current) setCurrent(cached.data.current);
+              if (cached.data.backRuns) setBackRuns(cached.data.backRuns);
+              if (cached.data.totals) setTotals(cached.data.totals);
+              if (cached.data.chuteFullAgg) setChuteFullAgg(cached.data.chuteFullAgg);
+              if (cached.data.outboundAgg) setOutboundAgg(cached.data.outboundAgg);
+              if (cached.data.outboundDefects) setOutboundDefects(cached.data.outboundDefects);
+              if (cached.data.psStats) setPsStats(cached.data.psStats);
+              if (cached.data.downtimeHours) setDowntimeHours(cached.data.downtimeHours);
+              if (cached.data.totesTotal) setTotesTotal(cached.data.totesTotal);
+              if (cached.data.sortState) setSortState(cached.data.sortState);
+              if (cached.data.smallSortRows) setSmallSortRows(cached.data.smallSortRows);
+              if (cached.data.primaryWorstMeta) setPrimaryWorstMeta(cached.data.primaryWorstMeta);
+              if (cached.data.mostToGain) setMostToGain(cached.data.mostToGain);
+              setLoading(false);
+              return;
+            }
+            throw new Error('No run found for selected date & sort.');
+          }
+
+          const fin = await fetchFinalRow(sortid);
+          const cur = { date: sortDate, sortid, hour: fin.hour, row: fin.row };
+          setCurrent(cur);
+          let smalls = [];
+          try {
+            smalls = await fetchSmallSortData(
+              sortDate.replace(/-/g, "-"),   // or whatever format your SmallSort expects
+              sortName                       // e.g. 'S', 'D', ...
+            );
+            setSmallSortRows(smalls);
+          } catch (e) {
+            console.error("Smalls fetch failed:", e);
+            setSmallSortError(e.message || "Failed to load Smalls data");
+          } finally {
+            setSmallSortLoading(false);
+          }
+
+
+          await Promise.allSettled([
+
+
+            (async () => {
+              try {
+                const t = await fetchBuildingVolumeAndDefects(sortid);
+
+                const smallSortVolume = calcSmallSortVolumeFromSmallRows(smalls || []);
+                t.smallSortVolume = smallSortVolume;
+                t.percentProcessedSmall = t.totalBuildingVolume > 0 ? (smallSortVolume / t.totalBuildingVolume) * 100 : null;
+
+                setTotals(t);
+              } catch (e) {
+                console.error("Totals fetch failed:", e);
+                setTotalsErr(e.message || "Failed to fetch BuildingVolume/Defects.");
+              }
+            })(),
+
+
+            (async () => {
+              try { setChuteFullAgg(aggregateChuteFullBySide(await fetchChuteFull(sortid))); }
+              catch (e) { setChuteFullErr(e.message || 'Failed to fetch OutChuteFull.'); }
+            })(),
+            (async () => {
+              try { setOutboundAgg(aggregateUptimeBySide(await fetchOutboundRuntime(sortid))); }
+              catch (e) { setOutboundErr(e.message || 'Failed to fetch Outbound Uptime.'); }
+            })(),
+            (async () => {
+              try { setOutboundDefects(aggregateDefectsBySide(await fetchOutboundDefects(sortid))); }
+              catch (e) { setOutboundDefectsErr(e.message || 'Failed to fetch Outbound Defects.'); }
+            })(),
+            (async () => {
+              try {
+                const rows = await fetchPrimaryLive(sortid);
+                setPsStats(computePSandRCStats(rows));
+              } catch (e) {
+                setPsErr(e.message || 'Failed to fetch PrimaryLive values.');
+              }
+            })(),
+            (async () => {
+              try {
+                const hrs = await fetchCollectorDowntimeHours(sortid);
+                setDowntimeHours(hrs);
+              } catch (e) {
+                setDowntimeErr(e.message || 'Failed to fetch collector downtime.');
+              }
+            })(),
+            (async () => {
+              try {
+                const total = await fetchTotesUtilization(sortid);
+                setTotesTotal(total);
+              } catch (e) {
+                setTotesErr(e.message || 'Failed to fetch tote utilization.');
+              }
+            })(),
+            (async () => {
+              try {
+                const ss = await fetchSortState(sortid);
+                setSortState(ss);
+              } catch (e) {
+                setSortStateErr(e.message || 'Failed to fetch sort start/end.');
+              }
+            })(),
+            (async () => {
+              try {
+                const meta = await fetchPrimaryLiveMeta(sortid);
+                setPrimaryWorstMeta(meta);
+              } catch (e) {
+                setPrimaryWorstErr(e.message || 'Failed to fetch worst PS read rate.');
+              }
+            })(),
+
+            (async () => {
+              try {
+                const raw = await fetchJson(
+                  `${MOST_TO_GAIN_URL}?sortid=${encodeURIComponent(String(sortid))}`
+                );
+                setMostToGain(normalizeMostToGain(raw));
+              } catch (e) {
+                setMostToGainErr(e.message || 'Failed to fetch Most to Gain outbound.');
+              }
+            })(),
+
+          ]);
+
+          const hist = [];
+          let day = 1;
+          while (hist.length < Number(numBack) && day <= (Number(numBack) + 14)) {
+            const d = prevDate(sortDate, day++);
+            const sid = await lookupSortId(d, sortName);
+            if (!sid) continue;
+            try {
+              const finH = await fetchFinalRow(sid);
+              hist.push({ date: d, sortid: sid, hour: finH.hour, row: finH.row });
+            } catch (e) {
+              console.warn(`Failed to fetch historical data for date ${d}:`, e.message || e);
+            }
+          }
+          hist.sort((a, b) => a.date.localeCompare(b.date));
+          setBackRuns(hist);
+
+          // Note: Full cache saving would require refactoring to capture all results locally
+          // For now, state preservation (not clearing at start) provides the key benefit
+        } catch (e) {
+          // Don't clear existing data - show error with current data still visible
+          setError(e.message || 'Failed to fetch data.');
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      function destroyCharts() {
+        if (lineChart.current) { lineChart.current.destroy(); lineChart.current = null; }
+        if (barChart.current) { barChart.current.destroy(); barChart.current = null; }
+      }
+
+      useEffect(() => {
+        if (!current) return;
+        if (selectedMetrics.length === 0 && numericMetrics.length > 0) {
+          setSelectedMetrics(numericMetrics.slice(0, Math.min(3, numericMetrics.length)));
+          return;
+        }
+        destroyCharts();
+
+        const ts = [...backRuns, current];
+        const labels = ts.map(t => t.date);
+        const datasets = selectedMetrics.map((m) => ({
+          label: m,
+          data: ts.map(t => Number(t.row[m] ?? NaN)),
+          borderWidth: 2,
+          pointRadius: 2,
+          tension: 0.25,
+        }));
+
+        if (lineRef.current) {
+          lineChart.current = new Chart(lineRef.current.getContext('2d'), {
+            type: 'line',
+            data: { labels, datasets },
+            options: {
+              responsive: true,
+              plugins: {
+                legend: { labels: { color: '#cbd5e1' } },
+                title: { display: true, text: 'Trend (selected metrics)', color: '#e2e8f0' }
+              },
+              scales: {
+                x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(148,163,184,0.15)' } },
+                y: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(148,163,184,0.15)' } }
+              }
+            }
+          });
+        }
+
+        const prev = backRuns.length ? backRuns[backRuns.length - 1] : null;
+        if (barRef.current && prev) {
+          barChart.current = new Chart(barRef.current.getContext('2d'), {
+            type: 'bar',
+            data: {
+              labels: selectedMetrics,
+              datasets: [
+                { label: `Prev (${prev.date})`, data: selectedMetrics.map(m => Number(prev.row[m] ?? NaN)) },
+                { label: `Current (${current.date})`, data: selectedMetrics.map(m => Number(current.row[m] ?? NaN)) },
+              ]
+            },
+            options: {
+              responsive: true,
+              plugins: {
+                legend: { labels: { color: '#cbd5e1' } },
+                title: { display: true, text: 'Current vs Previous', color: '#e2e8f0' }
+              },
+              scales: {
+                x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(148,163,184,0.15)' } },
+                y: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(148,163,184,0.15)' } }
+              }
+            }
+          });
+        }
+
+        return () => destroyCharts();
+      }, [current, backRuns, selectedMetrics, numericMetrics]);
+
+      const sortOptions = useMemo(
+        () => sortTypes.map(x => ({ value: x.SortType, label: x.SortNameMap || x.SortType })),
+        [sortTypes]
+      );
+
+      const headerPairs = useMemo(() => {
+        if (!current) return [];
+        const display = { ...current.row };
+        if (!('sortDate' in display)) display.sortDate = current.date;
+        if (!('sortName' in display)) display.sortName = sortName;
+        return KEY_FIELDS
+          .filter(k => k in display && display[k] != null && display[k] !== '')
+          .map(k => [k, display[k]]);
+      }, [current, sortName]);
+
+      const metricPairs = useMemo(() => {
+        if (!current) return [];
+        const display = current.row;
+        return Object.keys(display)
+          .filter(k => !KEY_FIELDS.includes(k))
+          .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+          .map(k => [k, display[k]]);
+      }, [current]);
+
+      // Only include metrics from the key dashboard sections
+      const displayedMetrics = useMemo(() => {
+        if (!current) return [];
+
+        const metrics = [];
+
+
+
+        // PS Averages (Primary)
+        if (psStats?.psAvgUptime != null) metrics.push({ key: 'PS Avg Uptime %', value: psStats.psAvgUptime });
+        if (psStats?.psAvgRead != null) metrics.push({ key: 'PS Avg Read Rate %', value: psStats.psAvgRead });
+        if (psStats?.psAvgChute != null) metrics.push({ key: 'PS Avg Chute-Full %', value: psStats.psAvgChute });
+        if (psStats?.psAvgNoRead != null) metrics.push({ key: 'PS Avg No Read %', value: psStats.psAvgNoRead });
+
+
+        // RC Collector Stats
+        if (psStats?.rcCollector?.rc1UptimePct != null) metrics.push({ key: 'RC01 Uptime %', value: psStats.rcCollector.rc1UptimePct });
+        if (psStats?.rcCollector?.rc1ChutePct != null) metrics.push({ key: 'RC01 Chute-Full %', value: psStats.rcCollector.rc1ChutePct });
+        if (psStats?.rcCollector?.rc2UptimePct != null) metrics.push({ key: 'RC02 Uptime %', value: psStats.rcCollector.rc2UptimePct });
+        if (psStats?.rcCollector?.rc2ChutePct != null) metrics.push({ key: 'RC02 Chute-Full %', value: psStats.rcCollector.rc2ChutePct });
+        if (psStats?.rcCollector?.rc3UptimePct != null) metrics.push({ key: 'RC03 Uptime %', value: psStats.rcCollector.rc3UptimePct });
+        if (psStats?.rcCollector?.rc3ChutePct != null) metrics.push({ key: 'RC03 Chute-Full %', value: psStats.rcCollector.rc3ChutePct });
+        if (psStats?.rcCollector?.rc4UptimePct != null) metrics.push({ key: 'RC04 Uptime %', value: psStats.rcCollector.rc4UptimePct });
+        if (psStats?.rcCollector?.rc4ChutePct != null) metrics.push({ key: 'RC04 Chute-Full %', value: psStats.rcCollector.rc4ChutePct });
+
+        // Collector Downtime
+        if (downtimeHours != null) metrics.push({ key: 'Collector Downtime (min)', value: downtimeHours });
+
+        // Defects & Volume
+        if (totals?.totalDefects != null) metrics.push({ key: 'Total Defects', value: totals.totalDefects });
+        if (totals?.totalBuildingVolume != null) metrics.push({ key: 'Total Building Volume', value: totals.totalBuildingVolume });
+        if (totals?.defectPct != null) metrics.push({ key: 'Defect %', value: totals.defectPct });
+        if (totals?.percentProcessedSmall != null) metrics.push({ key: 'Percent Processed Small %', value: totals.percentProcessedSmall });
+        if (totesTotal != null) metrics.push({ key: 'Totes Utilized in Primary', value: totesTotal });
+
+        // Outbound Defects by Side
+        if (outboundDefects?.North != null) metrics.push({ key: 'North Outbound Defects', value: outboundDefects.North });
+        if (outboundDefects?.South != null) metrics.push({ key: 'South Outbound Defects', value: outboundDefects.South });
+        if (totalDefectsForSide > 0 && outboundDefects?.North != null) {
+          metrics.push({ key: 'North Off-the-End %', value: (outboundDefects.North / totalDefectsForSide) * 100 });
+        }
+        if (totalDefectsForSide > 0 && outboundDefects?.South != null) {
+          metrics.push({ key: 'South Off-the-End %', value: (outboundDefects.South / totalDefectsForSide) * 100 });
+        }
+
+        // Outbound Performance Summary
+        if (chuteFullAgg?.North?.pct != null) metrics.push({ key: 'North Chute-Full %', value: chuteFullAgg.North.pct });
+        if (chuteFullAgg?.South?.pct != null) metrics.push({ key: 'South Chute-Full %', value: chuteFullAgg.South.pct });
+        if (combinedTotals?.totalChutefullPct != null) metrics.push({ key: 'Total Chute-Full %', value: combinedTotals.totalChutefullPct });
+        if (outboundAgg?.North?.pct != null) metrics.push({ key: 'North Uptime %', value: outboundAgg.North.pct });
+        if (outboundAgg?.South?.pct != null) metrics.push({ key: 'South Uptime %', value: outboundAgg.South.pct });
+        if (combinedTotals?.totalUptimePct != null) metrics.push({ key: 'Total Uptime %', value: combinedTotals.totalUptimePct });
+
+        return metrics.map(m => m.key);
+      }, [current, psStats, downtimeHours, totals, totesTotal, outboundDefects, totalDefectsForSide, chuteFullAgg, outboundAgg, combinedTotals]);
+
+      // Store historical metric data for each run
+      const [historicalMetrics, setHistoricalMetrics] = useState(new Map());
+
+      // Fetch and cache metric data for historical runs
+      useEffect(() => {
+        if (!current || backRuns.length === 0) return;
+
+        const fetchHistoricalData = async () => {
+          const newMap = new Map();
+
+          for (const run of [...backRuns, current]) {
+            const sortid = run.sortid;
+
+            // Fetch all needed data for this run
+            try {
+              const results = await Promise.allSettled([
+                fetchPrimaryLive(sortid).then(rows => computePSandRCStats(rows)),
+                fetchCollectorDowntimeHours(sortid),
+                fetchBuildingVolumeAndDefects(sortid),
+                fetchChuteFull(sortid).then(rows => aggregateChuteFullBySide(rows)),
+                fetchOutboundRuntime(sortid).then(rows => aggregateUptimeBySide(rows)),
+                fetchOutboundDefects(sortid).then(rows => aggregateDefectsBySide(rows)),
+                fetchTotesUtilization(sortid)
+              ]);
+
+              // Extract successful results, use null for failures
+              const psData = results[0].status === 'fulfilled' ? results[0].value : null;
+              const downtimeData = results[1].status === 'fulfilled' ? results[1].value : null;
+              const totalsData = results[2].status === 'fulfilled' ? results[2].value : null;
+              const chuteData = results[3].status === 'fulfilled' ? results[3].value : null;
+              const uptimeData = results[4].status === 'fulfilled' ? results[4].value : null;
+              const defectsData = results[5].status === 'fulfilled' ? results[5].value : null;
+              const totesData = results[6].status === 'fulfilled' ? results[6].value : null;
+
+              // Log any failures
+              results.forEach((result, index) => {
+                if (result.status === 'rejected') {
+                  const names = ['psStats', 'downtimeHours', 'totals', 'chuteFullAgg', 'outboundAgg', 'defects', 'totes'];
+                  console.warn(`Failed to fetch ${names[index]} for sortid ${sortid}:`, result.reason);
+                }
+              });
+
+              // Calculate combined totals (with null safety)
+              const cfN = toNumber(chuteData?.North?.totalCF) + toNumber(chuteData?.South?.totalCF);
+              const cfD = toNumber(chuteData?.North?.totalInput) + toNumber(chuteData?.South?.totalInput);
+              const upN = toNumber(uptimeData?.North?.uptime) + toNumber(uptimeData?.South?.uptime);
+              const upD = toNumber(uptimeData?.North?.runtime) + toNumber(uptimeData?.South?.runtime);
+
+              const combined = {
+                totalChutefullPct: cfD > 0 ? (cfN / cfD) * 100 : null,
+                totalUptimePct: upD > 0 ? (upN / upD) * 100 : null
+              };
+
+              // Store PARTIAL data even if some fields are null
+              newMap.set(sortid, {
+                psStats: psData,
+                downtimeHours: downtimeData,
+                totals: totalsData,
+                chuteFullAgg: chuteData,
+                outboundAgg: uptimeData,
+                outboundDefects: defectsData,
+                totesTotal: totesData,
+                combinedTotals: combined
+              });
+            } catch (e) {
+              console.error(`Failed to fetch historical data for sortid ${sortid}:`, e);
+            }
+          }
+
+          setHistoricalMetrics(newMap);
+        };
+
+        fetchHistoricalData();
+      }, [current, backRuns]);
+
+      // Function to get metric value for a specific run
+      const getMetricValue = useCallback((metricKey, run) => {
+        const data = historicalMetrics.get(run.sortid);
+        if (!data) return null;
+
+        // Map metric keys to their data sources
+        if (metricKey === 'PS Avg Uptime %') return data.psStats?.psAvgUptime;
+        if (metricKey === 'PS Avg Read Rate %') return data.psStats?.psAvgRead;
+        if (metricKey === 'PS Avg Chute-Full %') return data.psStats?.psAvgChute;
+        if (metricKey === 'RC01 Uptime %') return data.psStats?.rcCollector?.rc1UptimePct;
+        if (metricKey === 'RC01 Chute-Full %') return data.psStats?.rcCollector?.rc1ChutePct;
+        if (metricKey === 'RC02 Uptime %') return data.psStats?.rcCollector?.rc2UptimePct;
+        if (metricKey === 'RC02 Chute-Full %') return data.psStats?.rcCollector?.rc2ChutePct;
+        if (metricKey === 'RC03 Uptime %') return data.psStats?.rcCollector?.rc3UptimePct;
+        if (metricKey === 'RC03 Chute-Full %') return data.psStats?.rcCollector?.rc3ChutePct;
+        if (metricKey === 'RC04 Uptime %') return data.psStats?.rcCollector?.rc4UptimePct;
+        if (metricKey === 'RC04 Chute-Full %') return data.psStats?.rcCollector?.rc4ChutePct;
+        if (metricKey === 'Collector Downtime (min)') return data.downtimeHours;
+        if (metricKey === 'Total Defects') return data.totals?.totalDefects;
+        if (metricKey === 'Total Building Volume') return data.totals?.totalBuildingVolume;
+        if (metricKey === 'Defect %') return data.totals?.defectPct;
+        if (metricKey === 'Percent Processed Small %') return data.totals?.percentProcessedSmall;
+        if (metricKey === 'Totes Utilized in Primary') return data.totesTotal;
+        if (metricKey === 'North Outbound Defects') return data.outboundDefects?.North;
+        if (metricKey === 'South Outbound Defects') return data.outboundDefects?.South;
+        if (metricKey === 'PS Avg No Read %') return data.psStats?.psAvgNoRead;
+
+        if (metricKey === 'North Off-the-End %') {
+          const totalDef = data.totals?.totalDefects ?? 0;
+          return totalDef > 0 && data.outboundDefects?.North != null
+            ? (data.outboundDefects.North / totalDef) * 100
+            : null;
+        }
+        if (metricKey === 'South Off-the-End %') {
+          const totalDef = data.totals?.totalDefects ?? 0;
+          return totalDef > 0 && data.outboundDefects?.South != null
+            ? (data.outboundDefects.South / totalDef) * 100
+            : null;
+        }
+        if (metricKey === 'North Chute-Full %') return data.chuteFullAgg?.North?.pct;
+        if (metricKey === 'South Chute-Full %') return data.chuteFullAgg?.South?.pct;
+        if (metricKey === 'Total Chute-Full %') return data.combinedTotals?.totalChutefullPct;
+        if (metricKey === 'North Uptime %') return data.outboundAgg?.North?.pct;
+        if (metricKey === 'South Uptime %') return data.outboundAgg?.South?.pct;
+        if (metricKey === 'Total Uptime %') return data.combinedTotals?.totalUptimePct;
+
+        return null;
+      }, [historicalMetrics]);
+
+      function toggleMetric(m) {
+        setSelectedMetrics(prev =>
+          prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m]
+        );
+      }
+
+      return (
+        <div className="max-w-[1400px] mx-auto p-6">
+          <div className="mb-8">
+            <h1 className="text-4xl font-bold text-white mb-2 tracking-tight">
+              CACH Post Sort Summary
+            </h1>
+            <p className="text-slate-400 text-sm">
+              Pick Date &amp; Sort to fetch the final snapshot, then compare against previous sorts.
+            </p>
+          </div>
+
+          {/* Stale Data Warning Banner */}
+          {error && error.includes('cached data') && (
+            <div className="bg-yellow-900/30 border border-yellow-500/50 rounded-lg p-4 mb-6">
+              <div className="flex items-center gap-3">
+                <svg className="w-5 h-5 text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                </svg>
+                <div>
+                  <p className="text-yellow-200 font-medium">Showing Cached Data</p>
+                  <p className="text-yellow-300/80 text-sm">{error}</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* PRINT & SUBMIT BUTTONS */}
+          <div className="flex gap-4 mt-6">
+            {/* Print Button */}
+            <button
+              onClick={() => window.print()}
+              className="px-6 py-2.5 bg-slate-700 hover:bg-slate-600 text-white font-medium rounded-lg shadow transition-all"
+            >
+              Print Report
+            </button>
+
+            {/* Submit Button */}
+            <button
+              onClick={() => {
+                const APPROVED_EMP_IDS = new Set([
+                  "9014483",
+
+                  "E00001",
+                  "BASE42",
+                  "NIMESH01",
+                  // ...add more here
+                ]);
+
+                const normalizeId = (raw) =>
+                  (raw ?? "").trim().toUpperCase().replace(/\s+/g, "");
+
+                const rawInput = prompt("Enter your Employee ID to submit:");
+
+                if (!rawInput) {
+                  alert("Submission cancelled — Employee ID required.");
+                  return;
+                }
+
+                const empId = normalizeId(rawInput);
+
+                // validate empId BEFORE saving it
+                const isValidFormat = /^[A-Z0-9-]{3,12}$/.test(empId);
+                if (!isValidFormat) {
+                  alert("Invalid Employee ID format. Use letters, digits, or dashes (3–12 characters).");
+                  return;
+                }
+
+                // store it in state
+                setEmployeeId(empId);
+
+                const isApproved = APPROVED_EMP_IDS.has(empId);
+                if (!isApproved) {
+                  alert(
+                    `Employee ID "${rawInput}" is not in the approved list.\nIf this seems wrong, contact your supervisor or BaSE admin.`
+                  );
+                  return;
+                }
+
+                // SHORT SHARE URL
+                const base = window.location.origin + window.location.pathname;
+                const shareUrl =
+                  `${base}?sortDate=${encodeURIComponent(sortDate)}` +
+                  `&sortName=${encodeURIComponent(sortName)}`;
+
+                console.log("Share URL:", shareUrl);
+
+                alert("Report submitted successfully!");
+
+                // Optional: open Outlook Web in a new tab
+                window.open("https://outlook.office.com/mail/", "_blank", "noopener,noreferrer");
+
+                const to = "npatel3@ups.com";   // change as needed
+                const cc = "nnuno@ups.com";     // optional
+                const subject = `BaSE Report Submission - Employee ${empId}`;
+
+                const body =
+                  "Hello,\r\n\r\n" +
+                  "The BaSE report was submitted successfully.\r\n" +
+                  "Employee ID: " + empId + "\r\n" +
+                  "Submission Time: " + new Date().toLocaleString() + "\r\n\r\n" +
+                  "Report Link:\r\n" +
+                  shareUrl + "\r\n\r\n" +
+                  "Click the link above to open the report.\r\n\r\n" +
+                  "Regards,\r\nBaSE System";
+
+                const mailtoUrl =
+                  "mailto:" + encodeURIComponent(to) +
+                  "?cc=" + encodeURIComponent(cc) +
+                  "&subject=" + encodeURIComponent(subject) +
+                  "&body=" + encodeURIComponent(body);
+
+                window.location.href = mailtoUrl;
+              }}
+              className="px-6 py-2.5 bg-cyan-500 hover:bg-cyan-600 text-white font-medium rounded-lg shadow transition-all"
+            >
+              Submit Report
+            </button>
+          </div>
+
+          {/* Controls */}
+          <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">Sort Date</label>
+                <input
+                  type="date"
+                  value={sortDate}
+                  onChange={e => setSortDate(e.target.value)}
+                  className="w-full px-4 py-2.5 bg-slate-900/80 border border-slate-600 rounded-lg text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">Sort</label>
+                <select
+                  value={sortName}
+                  onChange={e => setSortName(e.target.value)}
+                  className="w-full px-4 py-2.5 bg-slate-900/80 border border-slate-600 rounded-lg text-white"
+                >
+                  {sortOptions.map(o => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">Previous runs (days)</label>
+                <select
+                  value={numBack}
+                  onChange={e => setNumBack(Number(e.target.value))}
+                  className="w-full px-4 py-2.5 bg-slate-900/80 border border-slate-600 rounded-lg text-white"
+                >
+                  {[1, 3, 5, 7, 10, 14, 30, 60].map(n => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="md:col-span-2">
+                <button
+                  onClick={onFetch}
+                  disabled={loading}
+                  className="w-full px-6 py-2.5 bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-600 hover:to-blue-600 text-white font-medium rounded-lg shadow-lg disabled:opacity-50 transition-all"
+                >
+                  {loading ? 'Fetching…' : 'Fetch Final & History'}
+                </button>
+              </div>
+            </div>
+
+            {error && (
+              <div className="mt-4 px-4 py-2.5 bg-red-500/20 border border-red-500 rounded-lg text-red-300 text-sm">
+                {error}
+              </div>
+            )}
+
+            {current && (
+              <div className="mt-4 text-slate-400 text-sm space-y-1">
+                <div>
+                  Resolved Sort ID:{' '}
+                  <span className="text-white font-medium">{current.sortid}</span>{' '}
+                  — Final hour used:{' '}
+                  <span className="text-white font-medium">{current.hour}</span>
+                </div>
+
+                <div className="flex flex-wrap gap-4 text-xs md:text-sm">
+                  <div>
+                    <span className="text-slate-400">Sort start:&nbsp;</span>
+                    <span className="text-white font-medium">
+                      {sortState?.sortStart || '—'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400">Sort end:&nbsp;</span>
+                    <span className="text-white font-medium">
+                      {sortState?.sortEnd || '—'}
+                    </span>
+                  </div>
+                  {sortStateErr && (
+                    <span className="text-red-300">
+                      ({sortStateErr})
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Defects & Volume + main metric cards */}
+          {current && (
+            <>
+              {/* 2-column grid for main metric cards */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                {/* Defects & Volume */}
+                <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
+                  <h2 className="text-white font-semibold text-lg mb-3">Defects &amp; Volume</h2>
+
+                  {!totals && !totalsErr && (
+                    <div className="text-slate-400 text-sm">Loading totals…</div>
+                  )}
+
+                  {totalsErr && (
+                    <div className="text-red-300 text-sm">{totalsErr}</div>
+                  )}
+
+                  {totals && (
+                    <div className="grid grid-cols-1 gap-3 text-slate-200">
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Total Building Volume</span>
+                        <span className="font-semibold">{fmtInt(totals.totalBuildingVolume)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Small Sort Volume</span>
+                        <span className="font-semibold">{fmtInt(totals.smallSortVolume)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Total Defects</span>
+                        <span className="font-semibold">{fmtInt(totals.totalDefects)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Defect %</span>
+                        <span
+                          className={`min-w-0 inline-flex items-center px-2 py-0.5 rounded-md border font-semibold ${getDefectPerformanceBadge(
+                            Number(totals?.defectPct)
+                          )}`}
+                        >
+                          {fmtPct(totals.defectPct)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Percent Processed Small %</span>
+                        <span className="font-semibold">{fmtPct(totals.percentProcessedSmall)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Totes Utilized in Primary</span>
+                        <span className="font-semibold">
+                          {totesTotal == null && !totesErr ? 'Loading…' : fmtInt(totesTotal || 0)}
+                        </span>
+                      </div>
+                      {totesErr && (
+                        <div className="text-red-300 text-sm mt-2">{totesErr}</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* PS averages */}
+                <div className="rounded-2xl border border-slate-700 p-5 bg-slate-900/40 mb-6">
+                  <div className="flex items-center justify-between mb-3">
+                    <h2 className="text-white font-semibold text-lg">PS01–PS46 Averages (Primary)</h2>
+                    {psErr && <span className="text-red-300 text-xs">{psErr}</span>}
+                  </div>
+                  {!psStats ? (
+                    <div className="text-slate-400 text-sm">Loading PS averages…</div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      <div>
+                        <div className="text-slate-400 text-xs mb-1">Avg Uptime %</div>
+                        <div className={`inline-flex items-center px-1 py-0.5 rounded-md border ${getPerformanceBadge(Number(psStats.psAvgUptime))}`}>
+                          {fmtPct(psStats.psAvgUptime)}
+                        </div>
+
+                      </div>
+                      <div>
+                        <div className="text-slate-400 text-xs mb-1">Avg Read Rate %</div>
+                        <div className={`inline-flex items-center px-2 py-0.5 rounded-md border ${getPerformanceBadge(Number(psStats.psAvgRead))}`}>
+                          {fmtPct(psStats.psAvgRead)}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-slate-400 text-xs mb-1">Avg Chute-Full %</div>
+                        <div className={`inline-flex items-center px-2 py-0.5 rounded-md border ${getLowPctPerformanceBadge(Number(psStats.psAvgChute))}`}>
+                          {fmtPct(psStats.psAvgChute)}
+                        </div>
+                      </div>
+
+                      <div className="col-span-full">
+                        <div className="text-slate-400 text-xs mb-1">Avg No Read %</div>
+                        <div className={`inline-flex items-center px-2 py-0.5 rounded-md border ${getLowPctPerformanceBadge(Number(psStats.psAvgNoRead))}`}>
+                          {fmtPct(psStats.psAvgNoRead)}
+                        </div>
+                      </div>
+
+                    </div>
+                  )}
+                </div>
+
+                {/* RC Collector Stats */}
+                <div className="rounded-2xl border border-slate-700 p-5 bg-slate-900/40 mb-6">
+                  <div className="flex items-center justify-between mb-3">
+                    <h2 className="text-white font-semibold text-lg">RC Collector Stats (RC01–RC04)</h2>
+                    {psErr && <span className="text-red-300 text-xs">{psErr}</span>}
+                  </div>
+                  {!psStats ? (
+                    <div className="text-slate-400 text-sm">Loading collector stats…</div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                      <div>
+                        <div className="text-slate-400 text-xs mb-1">RC01 Uptime %</div>
+                        <div className="text-xl font-semibold text-white mb-2">
+                          {fmtPct(psStats.rcCollector?.rc1UptimePct)}
+                        </div>
+                        <div className="text-slate-400 text-xs mb-1">RC01 Chute-Full %</div>
+                        <div className="text-xl font-semibold text-cyan-400">
+                          {fmtPct(psStats.rcCollector?.rc1ChutePct)}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-slate-400 text-xs mb-1">RC02 Uptime %</div>
+                        <div className="text-xl font-semibold text-white mb-2">
+                          {fmtPct(psStats.rcCollector?.rc2UptimePct)}
+                        </div>
+                        <div className="text-slate-400 text-xs mb-1">RC02 Chute-Full %</div>
+                        <div className="text-xl font-semibold text-cyan-400">
+                          {fmtPct(psStats.rcCollector?.rc2ChutePct)}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-slate-400 text-xs mb-1">RC03 Uptime %</div>
+                        <div className="text-xl font-semibold text-white mb-2">
+                          {fmtPct(psStats.rcCollector?.rc3UptimePct)}
+                        </div>
+                        <div className="text-slate-400 text-xs mb-1">RC03 Chute-Full %</div>
+                        <div className="text-xl font-semibold text-cyan-400">
+                          {fmtPct(psStats.rcCollector?.rc3ChutePct)}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-slate-400 text-xs mb-1">RC04 Uptime %</div>
+                        <div className="text-xl font-semibold text-white mb-2">
+                          {fmtPct(psStats.rcCollector?.rc4UptimePct)}
+                        </div>
+                        <div className="text-slate-400 text-xs mb-1">RC04 Chute-Full %</div>
+                        <div className="text-xl font-semibold text-cyan-400">
+                          {fmtPct(psStats.rcCollector?.rc4ChutePct)}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Collector Downtime */}
+                <div className="rounded-2xl border border-slate-700 p-5 bg-slate-900/40 mb-6">
+                  <div className="flex items-center justify-between mb-2">
+                    <h2 className="text-white font-semibold text-lg">
+                      Collector Downtime (Total Minutes)
+                    </h2>
+                    {downtimeErr && (
+                      <span className="text-red-300 text-xs">{downtimeErr}</span>
+                    )}
+                  </div>
+                  {downtimeHours == null ? (
+                    <div className="text-slate-400 text-sm">Loading downtime data…</div>
+                  ) : (
+                    <div className="text-3xl font-bold text-white">
+                      {downtimeHours} Minutes
+                    </div>
+                  )}
+                </div>
+
+                {/* Outbound Defects by Side */}
+                <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6">
+                  <h2 className="text-white font-semibold text-lg mb-3">Outbound Defects by Side</h2>
+
+                  {!outboundDefects && !outboundDefectsErr && (
+                    <div className="text-slate-400 text-sm">Loading outbound defects…</div>
+                  )}
+
+                  {outboundDefectsErr && (
+                    <div className="text-red-300 text-sm">{outboundDefectsErr}</div>
+                  )}
+
+                  {outboundDefects && (
+                    <div className="grid grid-cols-1 gap-4 text-slate-200">
+                      <div>
+                        <div className="text-slate-400 text-xs mb-1">North Outbound Total Defects</div>
+                        <div className="text-3xl font-bold text-white">
+                          {fmtInt(outboundDefects.North)}
+                        </div>
+
+                        <div className="mt-2 flex items-center gap-2">
+                          <span className="text-slate-400 text-xs">Off-the-End %</span>
+                          <span className="text-sm font-semibold">
+                            {totalDefectsForSide > 0
+                              ? fmtPct((outboundDefects.North / totalDefectsForSide) * 100)
+                              : '—'}
+                          </span>
+                        </div>
+
+                        <div className="mt-1 h-2 bg-slate-700 rounded">
+                          <div
+                            className={`h-2 rounded ${getBarColor((outboundDefects.North / totalDefectsForSide) * 100)}`}
+                            style={{
+                              width:
+                                totalDefectsForSide > 0
+                                  ? `${Math.min(100, (outboundDefects.North / totalDefectsForSide) * 100)}%`
+                                  : '0%',
+                            }}
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="text-slate-400 text-xs mb-1">South Outbound Total Defects</div>
+                        <div className="text-3xl font-bold text-white">
+                          {fmtInt(outboundDefects.South)}
+                        </div>
+
+                        <div className="mt-2 flex items-center gap-2">
+                          <span className="text-slate-400 text-xs">Off-the-End %</span>
+                          <span className="text-sm font-semibold">
+                            {totalDefectsForSide > 0
+                              ? fmtPct((outboundDefects.South / totalDefectsForSide) * 100)
+                              : '—'}
+                          </span>
+                        </div>
+
+                        <div className="mt-1 h-2 bg-slate-700 rounded">
+                          <div
+                            className={`h-2 rounded ${getBarColor((outboundDefects.South / totalDefectsForSide) * 100)}`}
+                            style={{
+                              width:
+                                totalDefectsForSide > 0
+                                  ? `${Math.min(100, (outboundDefects.South / totalDefectsForSide) * 100)}%`
+                                  : '0%',
+                            }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Outbound Summary */}
+                {(chuteFullAgg || outboundAgg) && (
+                  <div className="rounded-2xl border border-slate-700 bg-slate-900/40 p-5 mb-6 overflow-x-auto">
+                    <h2 className="text-white font-semibold text-lg mb-4">
+                      Outbound Performance Summary (Chute-Full % &amp; Uptime %)
+                    </h2>
+                    <table className="min-w-full text-sm text-slate-300 text-center">
+                      <thead className="bg-slate-800/60 border-b border-slate-700">
+                        <tr>
+                          <th className="px-4 py-2 text-left font-semibold">Metric</th>
+                          <th className="px-4 py-2 font-semibold">North</th>
+                          <th className="px-4 py-2 font-semibold">South</th>
+                          <th className="px-4 py-2 font-semibold">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-700/50">
+                        <tr>
+                          <td className="px-4 py-2 text-left text-slate-200 font-medium">Chute-Full %</td>
+                          <td className="px-4 py-2">{fmtPct(chuteFullAgg?.North?.pct)}</td>
+                          <td className="px-4 py-2">{fmtPct(chuteFullAgg?.South?.pct)}</td>
+                          <td className="px-4 py-2 font-semibold text-white">
+                            {fmtPct(combinedTotals.totalChutefullPct)}
+                          </td>
+                        </tr>
+                        <tr className="text-xs text-slate-500">
+                          <td className="px-4 py-1 text-left">CF / Input</td>
+                          <td className="px-4 py-1">
+                            {fmtInt(chuteFullAgg?.North?.totalCF || 0)} / {fmtInt(chuteFullAgg?.North?.totalInput || 0)}
+                          </td>
+                          <td className="px-4 py-1">
+                            {fmtInt(chuteFullAgg?.South?.totalCF || 0)} / {fmtInt(chuteFullAgg?.South?.totalInput || 0)}
+                          </td>
+                          <td className="px-4 py-1 font-semibold text-slate-400">
+                            {fmtInt(combinedTotals.cfNum)} / {fmtInt(combinedTotals.cfDen)}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="px-4 py-2 text-left text-slate-200 font-medium">Uptime %</td>
+                          <td className="px-4 py-2">{fmtPct(outboundAgg?.North?.pct)}</td>
+                          <td className="px-4 py-2">{fmtPct(outboundAgg?.South?.pct)}</td>
+                          <td className="px-4 py-2 font-semibold text-white">
+                            {fmtPct(combinedTotals.totalUptimePct)}
+                          </td>
+                        </tr>
+                        <tr className="text-xs text-slate-500">
+                          <td className="px-4 py-1 text-left">Up / Run</td>
+                          <td className="px-4 py-1">
+                            {fmtInt(outboundAgg?.North?.uptime || 0)} / {fmtInt(outboundAgg?.North?.runtime || 0)}
+                          </td>
+                          <td className="px-4 py-1">
+                            {fmtInt(outboundAgg?.South?.uptime || 0)} / {fmtInt(outboundAgg?.South?.runtime || 0)}
+                          </td>
+                          <td className="px-4 py-1 font-semibold text-slate-400">
+                            {fmtInt(combinedTotals.upNum)} / {fmtInt(combinedTotals.upDen)}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                    {chuteFullErr && (
+                      <div className="text-red-300 text-sm mt-3">{chuteFullErr}</div>
+                    )}
+                    {outboundErr && (
+                      <div className="text-red-300 text-sm mt-3">{outboundErr}</div>
+                    )}
+                  </div>
+                )}
+
+                {/* Smalls */}
+                {(smallSortRows?.length ?? 0) > 0 && (
+                  <div className="rounded-2xl border border-slate-700 bg-slate-900/40 p-5 mb-6 overflow-x-auto">
+                    <div className="flex items-center justify-between gap-3 mb-4">
+                      <h2 className="text-white font-semibold text-lg">
+                        Smalls – Sort Performance
+                      </h2>
+                    </div>
+
+                    {smallSortLoading && (
+                      <div className="text-slate-400 text-sm mb-2">Loading Smalls data…</div>
+                    )}
+                    {smallSortError && (
+                      <div className="text-red-400 text-sm mb-2">
+                        Failed to load Smalls data: {smallSortError}
+                      </div>
+                    )}
+
+                    <table className="min-w-full text-sm text-slate-300 text-center">
+                      <thead className="bg-slate-800/60 border-b border-slate-700">
+                        <tr>
+                          <th className="px-4 py-2 text-left font-semibold">Device</th>
+
+                          {/* ✅ single total column */}
+                          <th className="px-4 py-2 font-semibold">Total_volume</th>
+
+                          <th className="px-4 py-2 font-semibold">FPH</th>
+                          <th className="px-4 py-2 font-semibold">Sorter Uptime %</th>
+                          <th className="px-4 py-2 font-semibold">Chute-Full OTE %</th>
+                          <th className="px-4 py-2 font-semibold">Takeaway Not Running OTE %</th>
+                          <th className="px-4 py-2 font-semibold">Exception Bags Closed</th>
+                          <th className="px-4 py-2 font-semibold">No Reads %</th>
+                        </tr>
+                      </thead>
+
+                      <tbody className="divide-y divide-slate-700/50">
+                        {smallSortRows.map((row, idx) => (
+                          <tr key={`${row.module || row.device || "SLS"}-${row.slsId ?? "noid"}-${idx}`}>
+                            <td className="px-4 py-2 text-left text-slate-200 font-medium whitespace-nowrap">
+                              {row.module ?? "-"}
+                            </td>
+
+                            {/* ✅ Total_volume */}
+                            <td className="px-4 py-2 font-semibold text-slate-100">
+                              {row.Total_volume != null
+                                ? Number(row.Total_volume).toLocaleString(undefined, { maximumFractionDigits: 0 })
+                                : "-"}
+                            </td>
+
+                            <td className="px-4 py-2">
+                              {row.fph != null
+                                ? Number(row.fph).toLocaleString(undefined, { maximumFractionDigits: 0 })
+                                : "-"}
+                            </td>
+
+                            <td className="px-4 py-2">
+                              {row.sorterUptime != null ? `${Number(row.sorterUptime).toFixed(2)}%` : "-"}
+                            </td>
+
+                            <td className="px-4 py-2">
+                              {row.chuteFullOTE != null ? `${Number(row.chuteFullOTE).toFixed(2)}%` : "-"}
+                            </td>
+
+                            <td className="px-4 py-2">
+                              {row.takeawayNotRunningOTE != null
+                                ? `${Number(row.takeawayNotRunningOTE).toFixed(2)}%`
+                                : "-"}
+                            </td>
+
+                            <td className="px-4 py-2">
+                              {row.exceptionBagsClosed != null ? row.exceptionBagsClosed : "-"}
+                            </td>
+
+                            <td className="px-4 py-2">
+                              {row.noReadsPercent != null ? `${Number(row.noReadsPercent).toFixed(2)}%` : "-"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+
+                {/* Worst performing PS01–PS46 (avg read rate + top 5) */}
+                <div className="rounded-2xl border border-slate-700 p-5 bg-slate-900/40 mb-6">
+                  <div className="flex items-center justify-between mb-3">
+                    <h2 className="text-white font-semibold text-lg">
+                      Top 10 Most to Gain Primary Sorters (PS01 - PS46)
+                    </h2>
+                    {primaryWorstErr && (
+                      <span className="text-red-300 text-xs">{primaryWorstErr}</span>
+                    )}
+                  </div>
+
+                  {!primaryWorstMeta ? (
+                    <div className="text-slate-400 text-sm">Loading worst performers…</div>
+                  ) : (
+                    <>
+                      {/* Avg read rate for PS01–PS46 */}
+                      <div className="mb-4">
+                        <div className="text-slate-400 text-xs mb-1">
+                          Avg Primary Read Rate (PS01–PS46)
+                        </div>
+                        <div className="text-2xl font-semibold text-cyan-400">
+                          {fmtPct(primaryWorstMeta.avg_primary_read_rate)}
+                        </div>
+                      </div>
+
+                      {/* Top 15 table */}
+                      <div className="overflow-x-auto">
+                        <table className="min-w-full text-sm text-slate-300 text-center">
+                          <thead className="bg-slate-800/60 border-b border-slate-700">
+                            <tr>
+                              <th className="px-4 py-2 text-left font-semibold">Device</th>
+                              <th className="px-4 py-2 font-semibold">Read Rate %</th>
+                              <th className="px-4 py-2 font-semibold">No-Read %</th>
+                              <th className="px-4 py-2 font-semibold">Uptime %</th>
+                              <th className="px-4 py-2 font-semibold">Chute-Full %</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-700/50">
+                            {(primaryWorstMeta.devices || []).slice(0, 15).map((d, idx) => (
+                              <tr key={d.device?.trim() || idx}>
+                                <td className="px-4 py-2 text-left text-slate-200 font-medium">
+                                  {d.device?.trim() ?? '-'}
+                                </td>
+                                <td className={"px-4 py-2"}>
+                                  <span className={`inline-flex items-center px-2 py-0.5 rounded-md border ${getPerformanceBadge(Number(d.primary_read_rate))}`}>
+                                    {fmtPct(d.primary_read_rate)}
+                                  </span>
+                                </td>
+
+                                <td className="px-4 py-2">
+                                  <span className={`inline-flex items-center px-2 py-0.5 rounded-md border ${getLowPctPerformanceBadge(Number(d.no_read_pct))}`}>
+                                    {fmtPct(d.no_read_pct)}
+                                  </span>
+                                </td>
+
+                                <td className="px-4 py-2">
+                                  <span className={`inline-flex items-center px-2 py-0.5 rounded-md border ${getPerformanceBadge(Number(d.primary_uptime_pct))}`}>
+                                    {fmtPct(d.primary_uptime_pct)}
+                                  </span>
+                                </td>
+
+                                <td className="px-4 py-2">
+                                  <span className={`inline-flex items-center px-2 py-0.5 rounded-md border ${getLowPctPerformanceBadge(Number(d.chutefull_pct))}`}>
+                                    {fmtPct(d.chutefull_pct)}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Most to Gain – Outbound (No Read & Chute-Full) – FULL WIDTH */}
+              <div className="rounded-2xl border border-slate-700 bg-slate-900/40 p-5 mb-6">
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-white font-semibold text-lg">
+                    Most to Gain – Outbound (No Read &amp; Chute-Full)
+                  </h2>
+                  {mostToGainErr && (
+                    <span className="text-red-300 text-xs">
+                      {mostToGainErr}
+                    </span>
+                  )}
+                </div>
+
+                {!mostToGain && !mostToGainErr && (
+                  <div className="text-slate-400 text-sm">
+                    Loading Most to Gain outbound data…
+                  </div>
+                )}
+
+                {mostToGain && (
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {/* Worst No Read List */}
+                    <div>
+                      <h3 className="text-slate-200 font-semibold mb-2">
+                        No Read% — Top 5 per side
+                      </h3>
+                      <div className="space-y-4">
+                        {['North', 'South'].map(side => (
+                          <div key={side}>
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-slate-300 text-sm font-medium">{side} Side</span>
+                              <span className="text-xs text-slate-500">
+                                {mostToGain.worstNoReadBySide[side]?.length || 0} rows
+                              </span>
+                            </div>
+
+                            <div className="overflow-x-auto">
+                              <table className="min-w-full text-xs text-slate-300 text-center">
+                                <thead className="bg-slate-800/60 border-b border-slate-700">
+                                  <tr>
+                                    <th className="px-3 py-2 text-left font-semibold">Module</th>
+                                    <th className="px-3 py-2 font-semibold">Device</th>
+                                    <th className="px-3 py-2 font-semibold">Outbound</th>
+                                    <th className="px-3 py-2 font-semibold">No Read %</th>
+                                    <th className="px-3 py-2 font-semibold">No Track %</th>
+                                    <th className="px-3 py-2 font-semibold">Combined %</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-700/50">
+                                  {(mostToGain.worstNoReadBySide[side] || [])
+                                    .slice(0, 5)
+                                    .map((r, idx) => (
+                                      <tr key={`${side}-nr-${idx}`}>
+                                        <td className="px-3 py-1 text-left text-slate-200">
+                                          {r.module || '—'}
+                                        </td>
+                                        <td className="px-3 py-1">
+                                          {r.device || '—'}
+                                        </td>
+                                        <td className="px-3 py-1">
+                                          {r.outbound || '—'}
+                                        </td>
+                                        <td className="px-3 py-1">
+                                          {fmtPct(r.no_read_pct)}
+                                        </td>
+                                        <td className="px-3 py-1">
+                                          {fmtPct(r.no_track_pct)}
+                                        </td>
+                                        <td className="px-3 py-1 font-semibold text-amber-300">
+                                          {fmtPct(r.combined_no_read_pct)}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Worst Chute-Full List */}
+                    <div>
+                      <h3 className="text-slate-200 font-semibold mb-2">
+                        Chute-Full % — Top 5 per side
+                      </h3>
+                      <div className="space-y-4">
+                        {['North', 'South'].map(side => (
+                          <div key={side}>
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-slate-300 text-sm font-medium">{side} Side</span>
+                              <span className="text-xs text-slate-500">
+                                {mostToGain.worstChuteFullBySide[side]?.length || 0} rows
+                              </span>
+                            </div>
+
+                            <div className="overflow-x-auto">
+                              <table className="min-w-full text-xs text-slate-300 text-center">
+                                <thead className="bg-slate-800/60 border-b border-slate-700">
+                                  <tr>
+                                    <th className="px-3 py-2 text-left font-semibold">Module</th>
+                                    <th className="px-3 py-2 font-semibold">Device</th>
+                                    <th className="px-3 py-2 font-semibold">Outbound</th>
+                                    <th className="px-3 py-2 font-semibold">Chute-Full %</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-700/50">
+                                  {(mostToGain.worstChuteFullBySide[side] || [])
+                                    .slice(0, 5)
+                                    .map((r, idx) => (
+                                      <tr key={`${side}-cf-${idx}`}>
+                                        <td className="px-3 py-1 text-left text-slate-200">
+                                          {r.module || '—'}
+                                        </td>
+                                        <td className="px-3 py-1">
+                                          {r.device || '—'}
+                                        </td>
+                                        <td className="px-3 py-1">
+                                          {r.outbound || '—'}
+                                        </td>
+                                        <td className="px-3 py-1 text-cyan-300">
+                                          {fmtPct(r.chutefull_pct)}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Operator Manual Entry – FULL WIDTH */}
+              <div className="bg-slate-800/50 rounded-2xl border border-slate-700 p-6 mb-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-white font-semibold text-lg">Operator Notes (per sort)</h2>
+                  <div className="flex items-center gap-4">
+                    {/* Sync Status Indicator */}
+                    <div className="flex items-center gap-2 text-xs">
+                      {syncStatus === 'synced' && (
+                        <span className="text-green-400 flex items-center gap-1">
+                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                          </svg>
+                          Synced
+                        </span>
+                      )}
+                      {syncStatus === 'saving' && (
+                        <span className="text-yellow-400 flex items-center gap-1">
+                          <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          Saving...
+                        </span>
+                      )}
+                      {syncStatus === 'error' && (
+                        <span className="text-red-400 flex items-center gap-1">
+                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                          </svg>
+                          Sync Failed
+                        </span>
+                      )}
+                      {lastUpdatedBy && (
+                        <span className="text-slate-400">
+                          | Last updated by: {lastUpdatedBy} {lastUpdatedAt && `at ${new Date(lastUpdatedAt).toLocaleString()}`}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-slate-400 space-y-1">
+                      SortId:{' '}
+                      <span className="text-slate-300 font-mono">{currentSortId ?? '-'}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="rounded-xl border border-slate-700 p-4 bg-slate-900/40">
+                    <div className="text-slate-300 font-medium mb-2">Primary Downtime (min)</div>
+
+                    <label className="block text-xs text-slate-400 mb-1">Actual</label>
+                    <input
+                      type="text"
+                      inputMode="text"
+                      pattern="^[0-9:]*$"                // allows things like 1:30, 0:45, 90
+                      className="w-full px-3 py-2 bg-slate-900/80 border border-slate-600 rounded-lg text-white placeholder-slate-700"
+                      value={manual.downtimeActual}
+                      onChange={e => setManual(m => ({ ...m, downtimeActual: e.target.value }))}
+                      placeholder="e.g., 1:30"
+                    />
+
+                    <label className="block text-xs text-slate-400 mt-3 mb-1">Plan</label>
+                    <input
+                      type="text"
+                      inputMode="text"
+                      pattern="^[0-9:]*$"
+                      className="w-full px-3 py-2 bg-slate-900/80 border border-slate-600 rounded-lg text-white placeholder-slate-700"
+                      value={manual.downtimePlan}
+                      onChange={e => setManual(m => ({ ...m, downtimePlan: e.target.value }))}
+                      placeholder="e.g., 1:00"
+                    />
+                  </div>
+
+                  <div className="rounded-xl border border-slate-700 p-4 bg-slate-900/40">
+                    <div className="text-slate-300 font-medium mb-2">Staffing @ +30 min (heads)</div>
+                    <label className="block text-xs text-slate-400 mb-1">Actual</label>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min="0"
+                      className="w-full px-3 py-2 bg-slate-900/80 border border-slate-600 rounded-lg text-white placeholder-slate-700"
+                      value={manual.staffingActual}
+                      onChange={e => setManual(m => ({ ...m, staffingActual: e.target.value }))}
+                      placeholder="e.g., 85"
+                    />
+                    <label className="block text-xs text-slate-400 mt-3 mb-1">Plan</label>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min="0"
+                      className="w-full px-3 py-2 bg-slate-900/80 border border-slate-600 rounded-lg text-white placeholder-slate-700"
+                      value={manual.staffingPlan}
+                      onChange={e => setManual(m => ({ ...m, staffingPlan: e.target.value }))}
+                      placeholder="e.g., 90"
+                    />
+                  </div>
+
+                  <div className="rounded-xl border border-slate-700 p-4 bg-slate-900/40">
+                    <div className="text-slate-300 font-medium mb-2">Feeder Staffing @ +30 min (heads)</div>
+                    <label className="block text-xs text-slate-400 mb-1">Actual</label>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min="0"
+                      className="w-full px-3 py-2 bg-slate-900/80 border border-slate-600 rounded-lg text-white placeholder-slate-700"
+                      value={manual.feederStaffingActual}
+                      onChange={e => setManual(m => ({ ...m, feederStaffingActual: e.target.value }))}
+                      placeholder="e.g., 12"
+                    />
+                    <label className="block text-xs text-slate-400 mt-3 mb-1">Plan</label>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min="0"
+                      className="w-full px-3 py-2 bg-slate-900/80 border border-slate-600 rounded-lg text-white placeholder-slate-700"
+                      value={manual.feederStaffingPlan}
+                      onChange={e => setManual(m => ({ ...m, feederStaffingPlan: e.target.value }))}
+                      placeholder="e.g., 14"
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-4">
+                  <div className="flex-1 min-w-[140px]">
+                    <label className="block text-slate-300 font-medium mb-2">
+                      Moves on scratch pad at sort start
+                    </label>
+                    <textarea
+                      rows={2}
+                      className="w-full px-3 py-2 bg-slate-900/80 border border-slate-600 rounded-lg text-white placeholder-slate-600"
+                      value={manual.movesScratchPad}
+                      onChange={e => setManual(m => ({ ...m, movesScratchPad: e.target.value }))}
+                      placeholder="Notes or count of moves at sort start…"
+                    />
+                  </div>
+                  <div className="flex-1 min-w-[140px]">
+                    <label className="block text-slate-300 font-medium mb-2">
+                      Primary Air Temperature
+                    </label>
+                    <textarea
+                      rows={2}
+                      className="w-full px-3 py-2 bg-slate-900/80 border border-slate-600 rounded-lg text-white placeholder-slate-600"
+                      value={manual.primaryAirTemperature || ''}
+                      onChange={e => setManual(m => ({ ...m, primaryAirTemperature: e.target.value }))}
+                      placeholder="Primary Air Temperature..."
+                    />
+                  </div>
+                  <div className="flex-1 min-w-[140px]">
+                    <label className="block text-slate-300 font-medium mb-2">
+                      BaSE Collector Downtime
+                    </label>
+                    <textarea
+                      rows={2}
+                      className="w-full px-3 py-2 bg-slate-900/80 border border-slate-600 rounded-lg text-white placeholder-slate-600"
+                      value={manual.BaSECollectorDowntime || ''}
+                      onChange={e => setManual(m => ({ ...m, BaSECollectorDowntime: e.target.value }))}
+                      placeholder="BaSE Collector Downtime..."
+                    />
+                  </div>
+                  <div className="flex-1 min-w-[140px]">
+                    <label className="block text-slate-300 font-medium mb-2">
+                      Operation Collector Downtime
+                    </label>
+                    <textarea
+                      rows={2}
+                      className="w-full px-3 py-2 bg-slate-900/80 border border-slate-600 rounded-lg text-white placeholder-slate-600"
+                      value={manual.operationCollectorDowntime}
+                      onChange={e => setManual(m => ({ ...m, operationCollectorDowntime: e.target.value }))}
+                      placeholder="Operation Collector Downtime..."
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-4">
+                  <div className="flex-1 min-w-[140px]">
+                    <label className="block text-slate-300 font-medium mb-2">Total Breakdowns</label>
+                    <input
+                      type="number"
+                      className="w-full px-3 py-2 bg-slate-900/80 border border-slate-600 rounded-lg text-white placeholder-slate-600"
+                      value={manual.totalBreakdowns || ''}
+                      onChange={e => setManual(m => ({ ...m, totalBreakdowns: e.target.value }))}
+                      placeholder="Enter total breakdowns"
+                    />
+                  </div>
+
+                  <div className="flex-1 min-w-[140px]">
+                    <label className="block text-slate-300 font-medium mb-2">Mechanical Breakdown</label>
+                    <input
+                      type="number"
+                      className="w-full px-3 py-2 bg-slate-900/80 border border-slate-600 rounded-lg text-white placeholder-slate-600"
+                      value={manual.mechanicalBreakdown || ''}
+                      onChange={e => setManual(m => ({ ...m, mechanicalBreakdown: e.target.value }))}
+                      placeholder="Enter mechanical breakdowns"
+                    />
+                  </div>
+
+                  <div className="flex-1 min-w-[140px]">
+                    <label className="block text-slate-300 font-medium mb-2">Electrical Breakdowns</label>
+                    <input
+                      type="number"
+                      className="w-full px-3 py-2 bg-slate-900/80 border border-slate-600 rounded-lg text-white placeholder-slate-600"
+                      value={manual.electricalBreakdown || ''}
+                      onChange={e => setManual(m => ({ ...m, electricalBreakdown: e.target.value }))}
+                      placeholder="Enter electrical breakdowns"
+                    />
+                  </div>
+
+                  <div className="flex-1 min-w-[140px]">
+                    <label className="block text-slate-300 font-medium mb-2">FOD Breakdowns</label>
+                    <input
+                      type="number"
+                      className="w-full px-3 py-2 bg-slate-900/80 border border-slate-600 rounded-lg text-white placeholder-slate-600"
+                      value={manual.fodBreakdown || ''}
+                      onChange={e => setManual(m => ({ ...m, fodBreakdown: e.target.value }))}
+                      placeholder="Enter FOD breakdowns"
+                    />
+                  </div>
+
+                  <div className="flex-1 min-w-[140px]">
+                    <label className="block text-slate-300 font-medium mb-2">Abuse Breakdowns</label>
+                    <input
+                      type="number"
+                      className="w-full px-3 py-2 bg-slate-900/80 border border-slate-600 rounded-lg text-white placeholder-slate-600"
+                      value={manual.abuseBreakdown || ''}
+                      onChange={e => setManual(m => ({ ...m, abuseBreakdown: e.target.value }))}
+                      placeholder="Enter abuse breakdowns"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* ADVANCED GRAPHS SECTION – FULL WIDTH */}
+              {backRuns.length > 0 && (
+                <AdvancedGraphs
+                  current={current}
+                  backRuns={backRuns}
+                  displayedMetrics={displayedMetrics}
+                  getMetricValue={getMetricValue}
+                />
+              )}
+            </>
+          )}
+          <div className="mt-8 text-center text-slate-500 text-xs space-y-1">
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<Dashboard />);
+  </script>
+</body>
+
+</html>
