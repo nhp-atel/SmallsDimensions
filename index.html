@@ -494,6 +494,27 @@
             font-style: italic;
         }
 
+        .sort-badge {
+            display: inline-block;
+            font-size: 0.65rem;
+            padding: 1px 6px;
+            border-radius: 8px;
+            margin-left: 6px;
+            font-weight: 600;
+            vertical-align: middle;
+        }
+
+        .sort-badge.active {
+            background: #dcfce7;
+            color: #166534;
+            animation: pulse 2s infinite;
+        }
+
+        .sort-badge.ended {
+            background: #f1f5f9;
+            color: #94a3b8;
+        }
+
         .diag-panel {
             margin-top: 12px;
             padding: 14px;
@@ -697,6 +718,10 @@
             <div class="card-body">
                 <div class="data-toolbar">
                     <div>
+                        <label>Dimension</label>
+                        <select id="dimSelect" onchange="onDimChange()"></select>
+                    </div>
+                    <div>
                         <label>Date</label>
                         <select id="dateSelect" onchange="loadDayData()"></select>
                     </div>
@@ -802,6 +827,8 @@
         let dimSnapB = {};
         let currentConfig = null;
         let pollTimer = null;
+        let selectedDim = DIM_LABELS[0];
+        let manualTabSwitch = {};
 
         // --- API helpers ---
         function api(url) { return fetch(url).then(r => r.json()); }
@@ -947,7 +974,7 @@
 
                 if (pollTimer) clearInterval(pollTimer);
                 if (running) {
-                    pollTimer = setInterval(() => { pollStatus(); loadHistory(); }, 15000);
+                    pollTimer = setInterval(() => { pollStatus(); loadHistory(); loadDayData(); }, 60000);
                 }
             }).catch(() => { });
         }
@@ -1107,11 +1134,74 @@
                             dimSnapB[label] = -1;
                         }
                         if (!dimActiveTab[label]) dimActiveTab[label] = 'summary';
+
+                        // Auto-select active sort tab if user hasn't manually switched
+                        if (!manualTabSwitch[label]) {
+                            const sortActivity = detectSortActivity(label);
+                            const activeSorts = Object.entries(sortActivity)
+                                .filter(([_, v]) => v.status === 'active')
+                                .map(([k, _]) => k.toLowerCase());
+                            if (activeSorts.length > 0) {
+                                dimActiveTab[label] = activeSorts[0];
+                            }
+                        }
                     });
 
+                    populateDimDropdown();
                     renderAllDimSections();
                 })
                 .catch(() => { dayData = []; dimData = {}; renderAllDimSections(); });
+        }
+
+        // --- Dimension dropdown ---
+        function populateDimDropdown() {
+            const sel = document.getElementById('dimSelect');
+            if (!sel) return;
+            sel.innerHTML = '';
+            DIM_LABELS.forEach(label => {
+                const snaps = dimData[label] || [];
+                const opt = document.createElement('option');
+                opt.value = label;
+                opt.textContent = label + ' (' + snaps.length + ' snaps)';
+                if (label === selectedDim) opt.selected = true;
+                sel.appendChild(opt);
+            });
+        }
+
+        function onDimChange() {
+            selectedDim = document.getElementById('dimSelect').value;
+            renderAllDimSections();
+        }
+
+        // --- Sort activity detection ---
+        function detectSortActivity(dimLabel) {
+            const sortNames = ['Sunrise', 'Daysort', 'Twilight', 'Night'];
+            const snaps = dimData[dimLabel] || [];
+            const result = {};
+
+            if (snaps.length < 2) {
+                sortNames.forEach(s => result[s] = { status: 'unknown', lastDelta: null });
+                return result;
+            }
+
+            const lastSnap = snaps[snaps.length - 1];
+            const prevSnap = snaps[snaps.length - 2];
+
+            sortNames.forEach(sortName => {
+                const currTotal = parseNum(getSortTotal(lastSnap, sortName));
+                const prevTotal = parseNum(getSortTotal(prevSnap, sortName));
+                const delta = currTotal - prevTotal;
+
+                if (currTotal === 0 && prevTotal === 0) {
+                    result[sortName] = { status: 'unknown', lastDelta: 0 };
+                } else if (delta > 0) {
+                    result[sortName] = { status: 'active', lastDelta: delta };
+                } else {
+                    result[sortName] = { status: 'ended', lastDelta: 0 };
+                }
+            });
+
+            return result;
         }
 
         // --- Render all dimension sections ---
@@ -1123,68 +1213,75 @@
                 return;
             }
 
+            // Only render the selected dimension
+            const label = selectedDim;
+            const snaps = dimData[label] || [];
+            const safeLabel = label.replace(/[^a-zA-Z0-9]/g, '_');
+            const sortActivity = detectSortActivity(label);
+
             let html = '';
-            DIM_LABELS.forEach(label => {
-                const snaps = dimData[label] || [];
-                const safeLabel = label.replace(/[^a-zA-Z0-9]/g, '_');
+            html += '<div class="dim-section">';
+            html += '<div class="dim-section-header">' + esc(label) + ' (' + snaps.length + ' snapshots)</div>';
+            html += '<div style="padding: 16px;">';
 
-                html += '<div class="dim-section">';
-                html += '<div class="dim-section-header">' + esc(label) + ' (' + snaps.length + ' snapshots)</div>';
-                html += '<div style="padding: 16px;">';
+            if (snaps.length === 0) {
+                html += '<div class="empty-state">No data for this dimension</div>';
+            } else {
+                html += '<div class="snapshot-toolbar">';
+                html += '<label>Snapshot A:</label>';
+                html += '<select id="snapA_' + safeLabel + '" onchange="onSnapChange(\'' + label + '\')">';
+                snaps.forEach((s, i) => {
+                    const t = s.fetchedAtCentral || formatUtc(s.fetchedAtUtc);
+                    const sel = i === (dimSnapA[label] || 0) ? ' selected' : '';
+                    html += '<option value="' + i + '"' + sel + '>' + esc(t) + '</option>';
+                });
+                html += '</select>';
 
-                if (snaps.length === 0) {
-                    html += '<div class="empty-state">No data for this dimension</div>';
-                } else {
-                    html += '<div class="snapshot-toolbar">';
-                    html += '<label>Snapshot A:</label>';
-                    html += '<select id="snapA_' + safeLabel + '" onchange="onSnapChange(\'' + label + '\')">';
-                    snaps.forEach((s, i) => {
-                        const t = s.fetchedAtCentral || formatUtc(s.fetchedAtUtc);
-                        const sel = i === (dimSnapA[label] || 0) ? ' selected' : '';
-                        html += '<option value="' + i + '"' + sel + '>' + esc(t) + '</option>';
-                    });
-                    html += '</select>';
+                html += '<label>Snapshot B:</label>';
+                html += '<select id="snapB_' + safeLabel + '" onchange="onSnapChange(\'' + label + '\')">';
+                snaps.forEach((s, i) => {
+                    const t = s.fetchedAtCentral || formatUtc(s.fetchedAtUtc);
+                    const sel = i === (dimSnapB[label] || 0) ? ' selected' : '';
+                    html += '<option value="' + i + '"' + sel + '>' + esc(t) + '</option>';
+                });
+                html += '</select>';
+                html += '</div>';
 
-                    html += '<label>Snapshot B:</label>';
-                    html += '<select id="snapB_' + safeLabel + '" onchange="onSnapChange(\'' + label + '\')">';
-                    snaps.forEach((s, i) => {
-                        const t = s.fetchedAtCentral || formatUtc(s.fetchedAtUtc);
-                        const sel = i === (dimSnapB[label] || 0) ? ' selected' : '';
-                        html += '<option value="' + i + '"' + sel + '>' + esc(t) + '</option>';
-                    });
-                    html += '</select>';
-                    html += '</div>';
+                const activeTab = dimActiveTab[label] || 'summary';
+                html += '<div class="tabs">';
+                ['summary', 'sunrise', 'daysort', 'twilight', 'night'].forEach(tab => {
+                    const tabLabel = tab.charAt(0).toUpperCase() + tab.slice(1);
+                    const cls = tab === activeTab ? 'tab active' : 'tab';
+                    let badge = '';
+                    if (tab !== 'summary') {
+                        const activity = sortActivity[tabLabel];
+                        if (activity && activity.status === 'active') {
+                            badge = '<span class="sort-badge active">LIVE</span>';
+                        } else if (activity && activity.status === 'ended') {
+                            badge = '<span class="sort-badge ended">ENDED</span>';
+                        }
+                    }
+                    html += '<div class="' + cls + '" data-tab="' + tab + '" onclick="switchDimTab(\'' + label + '\',\'' + tab + '\')">' + tabLabel + badge + '</div>';
+                });
+                html += '</div>';
 
-                    const activeTab = dimActiveTab[label] || 'summary';
-                    html += '<div class="tabs">';
-                    ['summary', 'sunrise', 'daysort', 'twilight', 'night'].forEach(tab => {
-                        const tabLabel = tab.charAt(0).toUpperCase() + tab.slice(1);
-                        const cls = tab === activeTab ? 'tab active' : 'tab';
-                        html += '<div class="' + cls + '" data-tab="' + tab + '" onclick="switchDimTab(\'' + label + '\',\'' + tab + '\')">' + tabLabel + '</div>';
-                    });
-                    html += '</div>';
+                ['summary', 'sunrise', 'daysort', 'twilight', 'night'].forEach(tab => {
+                    const cls = tab === activeTab ? 'tab-content active' : 'tab-content';
+                    html += '<div class="' + cls + '" id="tab-' + tab + '-' + safeLabel + '"></div>';
+                });
+            }
 
-                    ['summary', 'sunrise', 'daysort', 'twilight', 'night'].forEach(tab => {
-                        const cls = tab === activeTab ? 'tab-content active' : 'tab-content';
-                        html += '<div class="' + cls + '" id="tab-' + tab + '-' + safeLabel + '"></div>';
-                    });
-                }
-
-                html += '</div></div>';
-            });
+            html += '</div></div>';
 
             container.innerHTML = html;
 
-            DIM_LABELS.forEach(label => {
-                const snaps = dimData[label] || [];
-                if (snaps.length > 0) {
-                    renderDimSummary(label);
-                    renderDimSortTab(label, 'sunrise', 'Sunrise');
-                    renderDimSortTab(label, 'daysort', 'Daysort');
-                    renderDimSortTab(label, 'twilight', 'Twilight');
-                    renderDimSortTab(label, 'night', 'Night');
-                }
-            });
+            if (snaps.length > 0) {
+                renderDimSummary(label);
+                renderDimSortTab(label, 'sunrise', 'Sunrise');
+                renderDimSortTab(label, 'daysort', 'Daysort');
+                renderDimSortTab(label, 'twilight', 'Twilight');
+                renderDimSortTab(label, 'night', 'Night');
+            }
         }
 
         // --- Snapshot selector change ---
@@ -1206,6 +1303,7 @@
         function switchDimTab(dimLabel, tabId) {
             const safeLabel = dimLabel.replace(/[^a-zA-Z0-9]/g, '_');
             dimActiveTab[dimLabel] = tabId;
+            manualTabSwitch[dimLabel] = true;
 
             const section = document.getElementById('tab-' + tabId + '-' + safeLabel);
             if (!section) return;
@@ -1251,6 +1349,23 @@
 
             const sortNames = ['Sunrise', 'Daysort', 'Twilight', 'Night'];
 
+            // Sort activity cards
+            const sortActivity = detectSortActivity(dimLabel);
+            let html = '<div style="margin-bottom: 16px; display: flex; gap: 12px; flex-wrap: wrap;">';
+            sortNames.forEach(sn => {
+                const activity = sortActivity[sn];
+                const isActive = activity && activity.status === 'active';
+                const isEnded = activity && activity.status === 'ended';
+                const bg = isActive ? '#dcfce7' : isEnded ? '#f1f5f9' : '#fef3c7';
+                const color = isActive ? '#166534' : isEnded ? '#94a3b8' : '#92400e';
+                const statusLabel = isActive ? 'LIVE' : isEnded ? 'ENDED' : '?';
+                const deltaText = isActive && activity.lastDelta != null ? ' (+' + activity.lastDelta.toLocaleString() + ')' : '';
+                html += '<div style="padding: 8px 14px; border-radius: 8px; background: ' + bg + '; color: ' + color + '; font-weight: 600; font-size: 0.85rem;">';
+                html += esc(sn) + ': ' + statusLabel + deltaText;
+                html += '</div>';
+            });
+            html += '</div>';
+
             const idxA = dimSnapA[dimLabel] != null ? dimSnapA[dimLabel] : 0;
             const idxB = dimSnapB[dimLabel] != null ? dimSnapB[dimLabel] : snaps.length - 1;
             const snapA = snaps[idxA];
@@ -1259,7 +1374,7 @@
             const timeA = snapA ? (snapA.fetchedAtCentral || formatUtc(snapA.fetchedAtUtc)) : '--';
             const timeB = snapB ? (snapB.fetchedAtCentral || formatUtc(snapB.fetchedAtUtc)) : '--';
 
-            let html = '<h4 style="margin-bottom:10px;">Delta (Selected): ' + esc(timeA) + ' vs ' + esc(timeB) + '</h4>';
+            html += '<h4 style="margin-bottom:10px;">Delta (Selected): ' + esc(timeA) + ' vs ' + esc(timeB) + '</h4>';
             html += '<div class="table-scroll"><table class="data-table"><thead><tr>';
             html += '<th>Sort</th><th>Snap A (' + esc(timeA) + ')</th><th>Snap B (' + esc(timeB) + ')</th><th>Delta</th>';
             html += '</tr></thead><tbody>';
