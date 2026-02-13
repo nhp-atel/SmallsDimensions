@@ -838,6 +838,7 @@
       if (!res.ok) throw new Error(`HTTP ${res.status} - ${res.statusText}`);
 
       const raw = await res.json();
+      console.log('[SmallSort] Raw API response:', JSON.stringify(raw).slice(0, 500));
       const rows = Array.isArray(raw) ? raw : [raw];
       if (!rows.length) return [];
 
@@ -1057,7 +1058,9 @@
         if (!prev || score(r) > score(prev)) deduped.set(key, r);
       }
 
-      return Array.from(deduped.values()).filter(r => !isBullfrog(r.device));
+      const result = Array.from(deduped.values()).filter(r => !isBullfrog(r.device));
+      console.log('[SmallSort] Processed rows:', result.map(r => ({ device: r.device, Total_volume: r.Total_volume })));
+      return result;
     }
 
 
@@ -1716,6 +1719,8 @@
 
       async function onFetch() {
         setLoading(true);
+        // Clear stale dashboard cache to prevent fallback to old data
+        try { localStorage.removeItem(`dashboard_${sortDate}_${sortName}`); } catch(e) {}
         // Clear only error states - preserve data until new fetch succeeds
         setError(null);
         setTotalsErr(null);

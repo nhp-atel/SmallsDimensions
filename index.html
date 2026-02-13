@@ -865,7 +865,8 @@
                 document.getElementById('cfgDimSets').textContent = dimDisplay;
 
                 const sorts = (cfg.Sorts || ['ALL']).map(s => s.toUpperCase());
-                document.getElementById('sortALL').checked = sorts.includes('ALL');
+                document.getElementById('sortALL').checked = true;
+                document.getElementById('sortALL').disabled = true;
                 document.getElementById('sortSUN').checked = sorts.includes('SUN');
                 document.getElementById('sortDAY').checked = sorts.includes('DAY');
                 document.getElementById('sortTWI').checked = sorts.includes('TWI');
@@ -874,13 +875,7 @@
         }
 
         function saveConfig() {
-            const sorts = [];
-            if (document.getElementById('sortALL').checked) sorts.push('ALL');
-            if (document.getElementById('sortSUN').checked) sorts.push('SUN');
-            if (document.getElementById('sortDAY').checked) sorts.push('DAY');
-            if (document.getElementById('sortTWI').checked) sorts.push('TWI');
-            if (document.getElementById('sortNGT').checked) sorts.push('NGT');
-            if (sorts.length === 0) sorts.push('ALL');
+            const sorts = ['ALL']; // Always fetch all sorts for complete data
 
             const config = {
                 Report: document.getElementById('cfgReport').value,
@@ -1135,14 +1130,25 @@
                         }
                         if (!dimActiveTab[label]) dimActiveTab[label] = 'summary';
 
-                        // Auto-select active sort tab if user hasn't manually switched
-                        if (!manualTabSwitch[label]) {
-                            const sortActivity = detectSortActivity(label);
-                            const activeSorts = Object.entries(sortActivity)
-                                .filter(([_, v]) => v.status === 'active')
-                                .map(([k, _]) => k.toLowerCase());
-                            if (activeSorts.length > 0) {
+                        // Auto-follow sort transitions
+                        const sortActivity = detectSortActivity(label);
+                        const activeSorts = Object.entries(sortActivity)
+                            .filter(([_, v]) => v.status === 'active')
+                            .map(([k, _]) => k.toLowerCase());
+
+                        if (activeSorts.length > 0) {
+                            const currentTab = dimActiveTab[label] || 'summary';
+
+                            if (currentTab === 'summary' && !manualTabSwitch[label]) {
+                                // First load: auto-select from summary to first active sort
                                 dimActiveTab[label] = activeSorts[0];
+                            } else if (currentTab !== 'summary') {
+                                // On a sort tab: if current sort ended, follow to next active sort
+                                const currentSortName = currentTab.charAt(0).toUpperCase() + currentTab.slice(1);
+                                const currentActivity = sortActivity[currentSortName];
+                                if (!currentActivity || currentActivity.status !== 'active') {
+                                    dimActiveTab[label] = activeSorts[0];
+                                }
                             }
                         }
                     });
@@ -1150,7 +1156,14 @@
                     populateDimDropdown();
                     renderAllDimSections();
                 })
-                .catch(() => { dayData = []; dimData = {}; renderAllDimSections(); });
+                .catch(err => {
+                    console.warn('[SmallsDim] Data refresh failed:', err);
+                    if (dayData.length === 0) {
+                        renderAllDimSections();
+                    } else {
+                        showControlMsg('Data refresh failed - showing cached data', 'var(--warning)');
+                    }
+                });
         }
 
         // --- Dimension dropdown ---

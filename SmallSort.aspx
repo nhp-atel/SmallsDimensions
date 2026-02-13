@@ -6,6 +6,10 @@
 
 <%
     Response.Clear();
+    Response.Cache.SetCacheability(HttpCacheability.NoCache);
+    Response.Cache.SetNoStore();
+    Response.AddHeader("Pragma", "no-cache");
+    Response.AddHeader("Expires", "0");
     Response.ContentType = "application/json; charset=utf-8";
 
     string connString = string.Format(
